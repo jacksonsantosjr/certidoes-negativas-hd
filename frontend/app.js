@@ -722,6 +722,69 @@ function configurarModais() {
         
         dom.modalEmpresa.classList.add('active');
     });
+
+    // Auto-preenchimento via CNPJ (BrasilAPI)
+    const cnpjInput = document.getElementById('empresa-cnpj');
+    let cnpjLookupTimeout = null;
+
+    cnpjInput.addEventListener('input', () => {
+        // Só busca em modo cadastro (não edição)
+        if (editingEmpresaId) return;
+
+        const cnpjLimpo = cnpjInput.value.replace(/\D/g, '');
+
+        // Cancela qualquer busca anterior pendente
+        if (cnpjLookupTimeout) {
+            clearTimeout(cnpjLookupTimeout);
+            cnpjLookupTimeout = null;
+        }
+
+        if (cnpjLimpo.length === 14) {
+            // Pequeno debounce de 300ms para evitar chamadas desnecessárias
+            cnpjLookupTimeout = setTimeout(() => buscarDadosCNPJ(cnpjLimpo), 300);
+        }
+    });
+
+    async function buscarDadosCNPJ(cnpj) {
+        const razaoInput = document.getElementById('empresa-razaosocial');
+        const ufInput = document.getElementById('empresa-uf');
+        const municipioInput = document.getElementById('empresa-municipio');
+
+        // Feedback visual: indica que está buscando
+        razaoInput.value = 'Buscando...';
+        ufInput.value = '...';
+        municipioInput.value = '...';
+        razaoInput.disabled = true;
+        ufInput.disabled = true;
+        municipioInput.disabled = true;
+
+        try {
+            const response = await fetch(`https://brasilapi.com.br/api/cnpj/v1/${cnpj}`);
+            
+            if (!response.ok) {
+                throw new Error(`CNPJ não encontrado (HTTP ${response.status})`);
+            }
+            
+            const dados = await response.json();
+
+            // Preenche os campos com os dados retornados
+            razaoInput.value = dados.razao_social || '';
+            ufInput.value = dados.uf || '';
+            municipioInput.value = dados.municipio || '';
+
+            showToast('Dados do CNPJ preenchidos automaticamente!', 'success');
+        } catch (err) {
+            console.warn('Erro ao buscar CNPJ na BrasilAPI:', err);
+            razaoInput.value = '';
+            ufInput.value = '';
+            municipioInput.value = '';
+            showToast('Não foi possível buscar os dados do CNPJ automaticamente. Preencha manualmente.', 'info');
+        } finally {
+            razaoInput.disabled = false;
+            ufInput.disabled = false;
+            municipioInput.disabled = false;
+        }
+    }
     
     // Fechamento
     const fecharModal = () => {

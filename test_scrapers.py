@@ -459,8 +459,6 @@ def treinar_perfil_federal():
         context.close()
 
 if __name__ == "__main__":
-    cnpj_teste = "00603226000187"  # CNPJ da Home Doctor SP cadastrado para teste
-    
     print("=" * 60)
     print(" SCRIPT DE TESTE INTERATIVO DE WEBSCRAPING (MODO VISÍVEL) ")
     print("=" * 60)
@@ -472,6 +470,13 @@ if __name__ == "__main__":
     print("5 - Treinar Perfil CND Federal (Manual)")
     
     opcao = input("\nDigite a opção desejada (1-5): ").strip()
+    
+    # Solicita o CNPJ (exceto para treinamento de perfil)
+    if opcao in ["1", "2", "3", "4"]:
+        cnpj_teste = input("Digite o CNPJ (apenas números): ").strip().replace(".", "").replace("/", "").replace("-", "")
+        if len(cnpj_teste) != 14:
+            print("CNPJ inválido! Deve conter 14 dígitos.")
+            sys.exit(1)
     
     # Habilita SSL bypass para chamadas locais caso necessário (rede corporativa)
     os.environ["NODE_TLS_REJECT_UNAUTHORIZED"] = "0"
@@ -490,3 +495,4 @@ if __name__ == "__main__":
         treinar_perfil_federal()
     else:
         print("Opção inválida.")
+
