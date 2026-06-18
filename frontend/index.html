@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Compliance Hub - Controle de Certidões Negativas</title>
+    
+    <!-- SEO Meta Tags -->
+    <meta name="description" content="Dashboard moderno e integrado para monitoramento e renovação automatizada de Certidões Negativas de Débito (CNDs) corporativas.">
+    <meta name="author" content="Home Health Care Doctor">
+    
+    <!-- Google Fonts & FontAwesome -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- Estilos Personalizados -->
+    <link rel="stylesheet" href="style.css">
+</head>
+<body class="dark-mode">
+    <div class="app-container">
+        
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <button class="sidebar-toggle" id="btn-sidebar-toggle" title="Expandir/Colapsar Menu">
+                <i class="fa-solid fa-chevron-left"></i>
+            </button>
+            <div class="sidebar-header">
+                <i class="fa-solid fa-shield-halved logo-icon"></i>
+                <div class="logo-text">
+                    <h1>ComplianceHub</h1>
+                    <span>CND Automation System</span>
+                </div>
+            </div>
+            <nav class="sidebar-nav">
+                <a href="#" class="nav-item active" id="btn-nav-dashboard">
+                    <i class="fa-solid fa-chart-line"></i> <span>Painel Geral</span>
+                </a>
+                <a href="#" class="nav-item" id="btn-nav-empresas">
+                    <i class="fa-solid fa-building"></i> <span>Empresas</span>
+                </a>
+                <a href="#" class="nav-item" id="btn-nav-fila">
+                    <i class="fa-solid fa-list-check"></i> <span>Fila de RPA</span>
+                </a>
+            </nav>
+            <div class="sidebar-footer">
+                <button class="theme-toggle" id="theme-toggle-btn">
+                    <i class="fa-solid fa-sun"></i> <span>Modo Claro</span>
+                </button>
+            </div>
+        </aside>
+
+        <!-- Main Content Area -->
+        <main class="main-content">
+            
+            <!-- Header -->
+            <header class="main-header">
+                <div class="header-title">
+                    <h2 id="page-title">Painel de Controle de CNDs</h2>
+                    <p id="page-subtitle">Monitoramento em tempo real das certidões negativas do grupo empresarial.</p>
+                </div>
+                <div class="header-actions">
+                    <button class="btn btn-secondary" id="btn-trigger-cron">
+                        <i class="fa-solid fa-rotate"></i> Verificar Vencimentos
+                    </button>
+                    <button class="btn btn-primary" id="btn-add-empresa">
+                        <i class="fa-solid fa-plus"></i> Nova Empresa
+                    </button>
+                </div>
+            </header>
+
+            <!-- Content Screens -->
+            <div class="content-body">
+                
+                <!-- SCREEN 1: DASHBOARD -->
+                <section id="screen-dashboard" class="screen-section active">
+                    
+                    <!-- KPI Cards (Estilo Glassmorphism) -->
+                    <div class="kpi-grid">
+                        <div class="kpi-card" id="kpi-total-empresas">
+                            <div class="kpi-icon icon-blue">
+                                <i class="fa-solid fa-building"></i>
+                            </div>
+                            <div class="kpi-info">
+                                <span class="kpi-label">Empresas Cadastradas</span>
+                                <h3 class="kpi-value" id="val-total-empresas">0</h3>
+                            </div>
+                        </div>
+                        <div class="kpi-card" id="kpi-cnd-regular">
+                            <div class="kpi-icon icon-green">
+                                <i class="fa-solid fa-circle-check"></i>
+                            </div>
+                            <div class="kpi-info">
+                                <span class="kpi-label">Certidões Regulares</span>
+                                <h3 class="kpi-value" id="val-cnd-regular">0</h3>
+                            </div>
+                        </div>
+                        <div class="kpi-card" id="kpi-cnd-atencao">
+                            <div class="kpi-icon icon-yellow">
+                                <i class="fa-solid fa-triangle-exclamation"></i>
+                            </div>
+                            <div class="kpi-info">
+                                <span class="kpi-label">Exigem Atenção / Vencidas</span>
+                                <h3 class="kpi-value" id="val-cnd-atencao">0</h3>
+                            </div>
+                        </div>
+                        <div class="kpi-card" id="kpi-rpa-fila">
+                            <div class="kpi-icon icon-purple">
+                                <i class="fa-solid fa-spinner fa-spin-slow"></i>
+                            </div>
+                            <div class="kpi-info">
+                                <span class="kpi-label">Fila de Processamento</span>
+                                <h3 class="kpi-value" id="val-rpa-fila">0</h3>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Filtros -->
+                    <div class="filter-card">
+                        <div class="filter-grid">
+                            <div class="filter-group search-bar">
+                                <label for="filter-search"><i class="fa-solid fa-magnifying-glass"></i> Buscar Empresa / CNPJ</label>
+                                <input type="text" id="filter-search" placeholder="Digite a razão social, apelido ou CNPJ...">
+                            </div>
+                            <div class="filter-group">
+                                <label for="filter-tipo">Tipo de CND</label>
+                                <select id="filter-tipo">
+                                    <option value="ALL">Todos os Tipos</option>
+                                    <option value="FEDERAL">Federal</option>
+                                    <option value="FGTS">FGTS (CRF)</option>
+                                    <option value="CNDT">Trabalhista (CNDT)</option>
+                                    <option value="MUNICIPAL">Municipal</option>
+                                </select>
+                            </div>
+                            <div class="filter-group">
+                                <label for="filter-status">Status</label>
+                                <select id="filter-status">
+                                    <option value="ALL">Todos os Status</option>
+                                    <option value="Regular">Regular</option>
+                                    <option value="Vencida">Vencida</option>
+                                    <option value="Em Renovação">Em Renovação</option>
+                                    <option value="Erro">Erro / Falha</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Tabela de CNDs -->
+                    <div class="table-container">
+                        <table class="cnd-table" id="table-cnd-list">
+                            <thead>
+                                <tr>
+                                    <th>Empresa / Filial</th>
+                                    <th>CNPJ</th>
+                                    <th>Tipo de CND</th>
+                                    <th>Status</th>
+                                    <th>Última Emissão</th>
+                                    <th>Vencimento</th>
+                                    <th class="actions-col">Ações</th>
+                                </tr>
+                            </thead>
+                            <tbody id="cnd-tbody">
+                                <tr>
+                                    <td colspan="7" class="loading-state">
+                                        <i class="fa-solid fa-spinner fa-spin"></i> Carregando dados do Supabase...
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
+                <!-- SCREEN 2: EMPRESAS -->
+                <section id="screen-empresas" class="screen-section">
+                    <div class="table-container">
+                        <table class="cnd-table" id="table-empresas-list">
+                            <thead>
+                                <tr>
+                                    <th>Apelido</th>
+                                    <th>Razão Social</th>
+                                    <th>CNPJ</th>
+                                    <th>Localização</th>
+                                    <th>Inscrição Est. / Mun.</th>
+                                    <th>Ações</th>
+                                </tr>
+                            </thead>
+                            <tbody id="empresas-tbody">
+                                <tr>
+                                    <td colspan="6" class="loading-state">Carregando lista de empresas...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
+                <!-- SCREEN 3: FILA RPA -->
+                <section id="screen-fila" class="screen-section">
+                    <div class="table-container">
+                        <table class="cnd-table" id="table-fila-list">
+                            <thead>
+                                <tr>
+                                    <th>Data Agendamento</th>
+                                    <th>Empresa / CND</th>
+                                    <th>Status Fila</th>
+                                    <th>Tentativas</th>
+                                    <th>Último Log / Erro</th>
+                                    <th>Ações</th>
+                                </tr>
+                            </thead>
+                            <tbody id="fila-tbody">
+                                <tr>
+                                    <td colspan="6" class="loading-state">Carregando fila de jobs...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+                
+            </div>
+        </main>
+    </div>
+
+    <!-- MODAL: NOVA EMPRESA -->
+    <div class="modal-overlay" id="modal-empresa">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h3>Cadastrar Nova Empresa/Filial</h3>
+                <button class="modal-close" id="btn-close-modal"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <form id="form-empresa" class="modal-form">
+                <div class="form-grid">
+                    <div class="form-group">
+                        <label for="empresa-cnpj">CNPJ (apenas números)</label>
+                        <input type="text" id="empresa-cnpj" required maxlength="14" placeholder="Ex: 12345678000199">
+                    </div>
+                    <div class="form-group">
+                        <label for="empresa-apelido">Apelido da Filial</label>
+                        <input type="text" id="empresa-apelido" required placeholder="Ex: SP-MATRIZ">
+                    </div>
+                    <div class="form-group full-width">
+                        <label for="empresa-razaosocial">Razão Social</label>
+                        <input type="text" id="empresa-razaosocial" required placeholder="Ex: Home Health Care Doctor SP Ltda">
+                    </div>
+                    <div class="form-group">
+                        <label for="empresa-uf">UF</label>
+                        <input type="text" id="empresa-uf" required maxlength="2" placeholder="Ex: SP">
+                    </div>
+                    <div class="form-group">
+                        <label for="empresa-municipio">Município</label>
+                        <input type="text" id="empresa-municipio" required placeholder="Ex: São Paulo">
+                    </div>
+                    <div class="form-group">
+                        <label for="empresa-ie">Inscrição Estadual</label>
+                        <input type="text" id="empresa-ie" placeholder="Opcional">
+                    </div>
+                    <div class="form-group">
+                        <label for="empresa-im">Inscrição Municipal</label>
+                        <input type="text" id="empresa-im" placeholder="Opcional">
+                    </div>
+                    <div class="form-group full-width" style="margin-top: 10px;">
+                        <label style="font-weight: 600; margin-bottom: 8px; display: block; color: var(--text-active);">Certidões a Monitorar</label>
+                        <div class="checkbox-group" style="display: flex; gap: 20px; flex-wrap: wrap; background: rgba(255,255,255,0.02); padding: 12px; border-radius: 8px; border: 1px solid var(--border-glass);">
+                            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 14px; color: var(--text-main);">
+                                <input type="checkbox" id="cert-federal" value="FEDERAL" checked style="width: auto; height: auto; cursor: pointer;"> Federal
+                            </label>
+                            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 14px; color: var(--text-main);">
+                                <input type="checkbox" id="cert-fgts" value="FGTS" checked style="width: auto; height: auto; cursor: pointer;"> FGTS (CRF)
+                            </label>
+                            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 14px; color: var(--text-main);">
+                                <input type="checkbox" id="cert-cndt" value="CNDT" checked style="width: auto; height: auto; cursor: pointer;"> Trabalhista (CNDT)
+                            </label>
+                            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 14px; color: var(--text-main);">
+                                <input type="checkbox" id="cert-municipal" value="MUNICIPAL" checked style="width: auto; height: auto; cursor: pointer;"> Municipal
+                            </label>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" id="btn-cancelar-cadastro">Cancelar</button>
+                    <button type="submit" class="btn btn-primary">Salvar Empresa</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- NOTIFICAÇÕES TOAST -->
+    <div class="toast-container" id="toast-container"></div>
+
+    <!-- SDK do Supabase JS via CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    
+    <!-- Script principal de lógica -->
+    <script src="app.js"></script>
+</body>
+</html>
