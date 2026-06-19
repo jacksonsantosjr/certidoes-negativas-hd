@@ -21,7 +21,7 @@ def get_chrome_path():
 def iniciar_e_conectar_chrome(p, user_data_dir, headless=False):
     chrome_running = False
     try:
-        response = requests.get("http://localhost:9222/json/version", timeout=2)
+        response = requests.get("http://127.0.0.1:9222/json/version", timeout=2)
         if response.status_code == 200:
             chrome_running = True
             print("Instância do Chrome na porta 9222 já está rodando. Conectando...")
@@ -41,9 +41,18 @@ def iniciar_e_conectar_chrome(p, user_data_dir, headless=False):
         if headless:
             chrome_args.append("--headless=new")
         subprocess.Popen(chrome_args)
-        time.sleep(0.2)
         
-    browser = p.chromium.connect_over_cdp("http://localhost:9222")
+        # Aguarda até 5 segundos ou até a porta 9222 responder
+        for _ in range(10):
+            time.sleep(0.5)
+            try:
+                response = requests.get("http://127.0.0.1:9222/json/version", timeout=1)
+                if response.status_code == 200:
+                    break
+            except Exception:
+                pass
+        
+    browser = p.chromium.connect_over_cdp("http://127.0.0.1:9222")
     context = browser.contexts[0] if browser.contexts else browser.new_context()
     return browser, context
 
