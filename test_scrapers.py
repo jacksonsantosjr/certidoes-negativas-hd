@@ -4,6 +4,8 @@ import time
 import subprocess
 import requests
 from playwright.sync_api import sync_playwright
+import speech_recognition as sr
+from pydub import AudioSegment
 
 def get_chrome_path():
     paths = [
@@ -424,6 +426,206 @@ def testar_cndt(cnpj):
         finally:
             browser.close()
 
+def resolver_recaptcha(page):
+    print("Iniciando resolução automática do reCAPTCHA...")
+    
+    # Adiciona a pasta bin do FFmpeg ao PATH para que o pydub a encontre
+    import os
+    ffmpeg_path = r"C:\Users\jackson.junior\AppData\Local\Microsoft\WinGet\Packages\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\ffmpeg-8.1.1-full_build\bin"
+    if os.path.exists(ffmpeg_path) and ffmpeg_path not in os.environ["PATH"]:
+        os.environ["PATH"] += os.pathsep + ffmpeg_path
+        
+    try:
+        # 1. Encontra o iframe do checkbox do reCAPTCHA (usando apenas o src do anchor para evitar conflito com o bframe)
+        frame_selector = 'iframe[src*="anchor"]'
+        page.wait_for_selector(frame_selector, timeout=15000)
+        frame = page.frame_locator(frame_selector)
+        
+        # 2. Clica no checkbox
+        anchor = frame.locator('#recaptcha-anchor')
+        anchor.click()
+        print("Checkbox do reCAPTCHA clicado.")
+        
+        # 3. Aguarda um momento para ver se o CAPTCHA foi resolvido automaticamente
+        time.sleep(3.0)
+        if anchor.get_attribute('aria-checked') == 'true':
+            print("reCAPTCHA resolvido automaticamente (sem desafio de imagem/áudio)!")
+            return True
+            
+        print("Desafio de segurança apresentado. Iniciando bypass via áudio...")
+        
+        # 4. Localiza o iframe do desafio (bframe)
+        bframe_selector = 'iframe[src*="bframe"]'
+        page.wait_for_selector(bframe_selector, timeout=10000)
+        bframe = page.frame_locator(bframe_selector)
+        
+        # 5. Clica no botão de áudio
+        audio_btn = bframe.locator('#recaptcha-audio-button')
+        audio_btn.wait_for(state="visible", timeout=5000)
+        audio_btn.click()
+        print("Botão de áudio clicado.")
+        time.sleep(2.0)
+        
+        # 6. Tenta obter o link de download do áudio (usando tanto link de download quanto tag audio-source)
+        audio_url = ""
+        try:
+            # Espera até que um dos seletores do áudio esteja disponível
+            bframe.locator('.rc-audiochallenge-download-link, #audio-source').first.wait_for(state="attached", timeout=6000)
+            
+            download_link = bframe.locator('.rc-audiochallenge-download-link')
+            audio_source = bframe.locator('#audio-source')
+            
+            if download_link.is_visible():
+                audio_url = download_link.get_attribute('href')
+            elif audio_source.count() > 0:
+                audio_url = audio_source.get_attribute('src')
+                
+            if not audio_url:
+                raise Exception("Não foi possível extrair a URL do áudio.")
+        except Exception as sel_err:
+            body_text = bframe.locator('body').inner_text()
+            if "tente novamente mais tarde" in body_text.lower() or "blocked" in body_text.lower() or "solicitações automatizadas" in body_text.lower() or "automated queries" in body_text.lower():
+                raise Exception("Bloqueio de reCAPTCHA detectado pelo Google (limite de requisições excedido). Tente novamente mais tarde.")
+            raise Exception(f"Falha ao carregar desafio de áudio: {sel_err}")
+            
+        print(f"URL do áudio obtido: {audio_url}")
+        
+        # 7. Faz o download do áudio MP3 (desabilitando verificação de certificado SSL por conta de proxies corporativos)
+        import requests
+        import urllib3
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        response = requests.get(audio_url, timeout=15, verify=False)
+        mp3_path = "temp_captcha.mp3"
+        wav_path = "temp_captcha.wav"
+        
+        with open(mp3_path, "wb") as f:
+            f.write(response.content)
+            
+        # 8. Converte MP3 para WAV
+        from pydub import AudioSegment
+        sound = AudioSegment.from_mp3(mp3_path)
+        sound.export(wav_path, format="wav")
+        print("Áudio convertido para WAV.")
+        
+        # 9. Transcreve o áudio usando SpeechRecognition
+        import speech_recognition as sr
+        r = sr.Recognizer()
+        with sr.AudioFile(wav_path) as source:
+            audio_data = r.record(source)
+            
+        text = r.recognize_google(audio_data, language="en-US")
+        print(f"Texto transcrito pelo Google Speech API: '{text}'")
+        
+        # Limpa os arquivos temporários
+        try:
+            os.remove(mp3_path)
+            os.remove(wav_path)
+        except:
+            pass
+            
+        # 10. Insere o texto transcrito
+        response_input = bframe.locator('#audio-response')
+        response_input.fill(text)
+        time.sleep(0.5)
+        
+        # 11. Clica no botão de verificar
+        verify_btn = bframe.locator('#recaptcha-verify-button')
+        verify_btn.click()
+        print("Botão de verificação clicado.")
+        time.sleep(3.0)
+        
+        # 12. Verifica se funcionou
+        if anchor.get_attribute('aria-checked') == 'true':
+            print("reCAPTCHA resolvido com sucesso via áudio!")
+            return True
+        else:
+            print("Falha na validação do áudio do reCAPTCHA.")
+            return False
+            
+    except Exception as e:
+        print(f"Erro ao resolver reCAPTCHA: {e}")
+        return False
+
+def testar_estadual_sp(cnpj):
+    print("\n--- TESTANDO CND ESTADUAL SP ---")
+    url = "https://www10.fazenda.sp.gov.br/CertidaoNegativaDeb/Pages/EmissaoCertidaoNegativa.aspx"
+    print(f"Acessando: {url}")
+    
+    user_data_dir = os.path.abspath("./user_data_sp")
+    
+    with sync_playwright() as p:
+        browser, context = iniciar_e_conectar_chrome(p, user_data_dir, headless=False)
+        page = context.new_page()
+        
+        try:
+            page.goto(url)
+            
+            # Selecionar o elemento xPath //*[@id="MainContent_cnpjradio"]
+            cnpj_radio_xpath = 'xpath=//*[@id="MainContent_cnpjradio"]'
+            page.wait_for_selector(cnpj_radio_xpath, timeout=20000)
+            page.click(cnpj_radio_xpath)
+            print("Opção CNPJ selecionada.")
+            
+            # Preencher o CNPJ no campo xPath //*[@id="MainContent_txtDocumento"]
+            cnpj_input_xpath = 'xpath=//*[@id="MainContent_txtDocumento"]'
+            page.wait_for_selector(cnpj_input_xpath, timeout=10000)
+            cnpj_limpo = cnpj.replace(".", "").replace("/", "").replace("-", "")
+            page.fill(cnpj_input_xpath, cnpj_limpo)
+            print("CNPJ preenchido.")
+            
+            # Resolver o CAPTCHA
+            recaptcha_resolvido = resolver_recaptcha(page)
+            if not recaptcha_resolvido:
+                print("\n[AVISO]: A resolução automática do reCAPTCHA falhou.")
+                print("Por favor, resolva o reCAPTCHA manualmente na tela do navegador.")
+                input("Pressione [ENTER] aqui no terminal depois de resolver o CAPTCHA para continuar... ")
+            
+            # Clicar no botão "EMITIR" cujo xPath é o //*[@id="MainContent_btnPesquisar"]
+            btn_emitir_xpath = 'xpath=//*[@id="MainContent_btnPesquisar"]'
+            page.wait_for_selector(btn_emitir_xpath, timeout=10000)
+            page.click(btn_emitir_xpath)
+            print("Botão EMITIR clicado. Aguardando a próxima página...")
+            
+            # Na tela seguinte, verificar se há o botão "IMPRIMIR" cujo xPath é o //*[@id="MainContent_btnImpressao"]
+            btn_imprimir_xpath = 'xpath=//*[@id="MainContent_btnImpressao"]'
+            try:
+                page.wait_for_selector(btn_imprimir_xpath, timeout=20000)
+                print("Sucesso! Botão IMPRIMIR encontrado na tela seguinte.")
+                page.screenshot(path="resultado_estadual_sp.png")
+                print("Print screen salvo como 'resultado_estadual_sp.png'")
+            except Exception as e:
+                print(f"Erro: Botão IMPRIMIR não encontrado ou houve erro na consulta. Detalhes: {e}")
+                page.screenshot(path="sp_error.png")
+                print("Screenshot da tela de erro salva em 'sp_error.png'")
+                
+            # Aguarde 1 segundo
+            time.sleep(1)
+            
+        except Exception as e:
+            print(f"Erro no teste Estadual SP: {e}")
+            try:
+                page.screenshot(path="sp_error.png")
+                print("Screenshot do erro salvo em 'sp_error.png'")
+            except:
+                pass
+        finally:
+            if 'page' in locals():
+                try:
+                    client = page.context.new_cdp_session(page)
+                    client.send("Browser.close")
+                except:
+                    pass
+                try: page.close()
+                except: pass
+            if 'context' in locals():
+                try: context.close()
+                except: pass
+            if 'browser' in locals():
+                try: browser.close()
+                except: pass
+            print("Instância do navegador fechada.")
+
+
 def treinar_perfil_federal():
     print("\n--- TREINAMENTO MANUAL DO PERFIL CND FEDERAL ---")
     print("Vou abrir o Chrome com o perfil persistente dedicado.")
@@ -466,13 +668,14 @@ if __name__ == "__main__":
     print("1 - CND Federal (Receita)")
     print("2 - CND FGTS (Caixa)")
     print("3 - CNDT Trabalhista (TST)")
-    print("4 - Testar Todos")
-    print("5 - Treinar Perfil CND Federal (Manual)")
+    print("4 - CND Estadual SP")
+    print("5 - Testar Todos")
+    print("6 - Treinar Perfil CND Federal (Manual)")
     
-    opcao = input("\nDigite a opção desejada (1-5): ").strip()
+    opcao = input("\nDigite a opção desejada (1-6): ").strip()
     
     # Solicita o CNPJ (exceto para treinamento de perfil)
-    if opcao in ["1", "2", "3", "4"]:
+    if opcao in ["1", "2", "3", "4", "5"]:
         cnpj_teste = input("Digite o CNPJ (apenas números): ").strip().replace(".", "").replace("/", "").replace("-", "")
         if len(cnpj_teste) != 14:
             print("CNPJ inválido! Deve conter 14 dígitos.")
@@ -488,11 +691,15 @@ if __name__ == "__main__":
     elif opcao == "3":
         testar_cndt(cnpj_teste)
     elif opcao == "4":
+        testar_estadual_sp(cnpj_teste)
+    elif opcao == "5":
         testar_federal(cnpj_teste)
         testar_fgts(cnpj_teste)
         testar_cndt(cnpj_teste)
-    elif opcao == "5":
+        testar_estadual_sp(cnpj_teste)
+    elif opcao == "6":
         treinar_perfil_federal()
     else:
         print("Opção inválida.")
+
 
