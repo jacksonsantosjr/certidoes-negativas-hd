@@ -595,15 +595,65 @@ def testar_estadual_sp(cnpj):
             page.click(btn_emitir_xpath)
             print("Botão EMITIR clicado. Aguardando a próxima página...")
             
-            # Na tela seguinte, verificar se há o botão "IMPRIMIR" cujo xPath é o //*[@id="MainContent_btnImpressao"]
+            # Na tela seguinte, localizar o botão "IMPRIMIR" e salvar a certidão como PDF
             btn_imprimir_xpath = 'xpath=//*[@id="MainContent_btnImpressao"]'
             try:
                 page.wait_for_selector(btn_imprimir_xpath, timeout=20000)
-                print("Sucesso! Botão IMPRIMIR encontrado na tela seguinte.")
-                page.screenshot(path="resultado_estadual_sp.png")
-                print("Print screen salvo como 'resultado_estadual_sp.png'")
+                print("Sucesso! Botão IMPRIMIR encontrado. Iniciando salvamento do PDF...")
+                
+                # Mock window.print para evitar bloquear a thread caso dispare o diálogo de impressão nativo
+                page.evaluate("window.print = () => { console.log('window.print simulado com sucesso'); }")
+                
+                temp_pdf_path = f"temp_estadual_sp_{cnpj}.pdf"
+                pdf_salvo = False
+                
+                try:
+                    # Tenta capturar se o botão dispara um download de arquivo direto
+                    with page.expect_download(timeout=5000) as download_info:
+                        page.click(btn_imprimir_xpath)
+                    download = download_info.value
+                    download.save_as(temp_pdf_path)
+                    print(f"PDF baixado com sucesso via download em: {temp_pdf_path}")
+                    page.screenshot(path="resultado_estadual_sp.png")
+                    pdf_salvo = True
+                except Exception:
+                    # Se não gerou um download direto, tiramos screenshot formatado para impressão
+                    pass
+                
+                if not pdf_salvo:
+                    # Emula mídia de impressão para carregar estilos de impressão da página
+                    page.emulate_media(media="print")
+                    
+                    # Oculta os botões de controle na página para não saírem no PDF impresso
+                    page.evaluate("""
+                        document.querySelectorAll('input[type="submit"], input[type="button"], button, .no-print, [id*="btnImpressao"], [id*="btnVoltar"]').forEach(el => el.style.display = 'none');
+                    """)
+                    
+                    # Clica no botão para disparar scripts internos (caso existam)
+                    try:
+                        page.click(btn_imprimir_xpath, timeout=2000)
+                    except:
+                        pass
+                    
+                    screenshot_path = "resultado_estadual_sp.png"
+                    page.screenshot(path=screenshot_path, full_page=True)
+                    print(f"Print screen do certificado salvo como '{screenshot_path}'")
+                    
+                    # Restaura a mídia para exibição em tela normal
+                    page.emulate_media(media="screen")
+                    
+                    # Converte o screenshot para PDF real usando Pillow
+                    try:
+                        from PIL import Image
+                        img = Image.open(screenshot_path).convert("RGB")
+                        img.save(temp_pdf_path, "PDF")
+                        print(f"PDF real gerado e salvo com sucesso em: {temp_pdf_path}")
+                        pdf_salvo = True
+                    except Exception as pdf_err:
+                        print(f"Erro ao converter screenshot para PDF: {pdf_err}")
+                
             except Exception as e:
-                print(f"Erro: Botão IMPRIMIR não encontrado ou houve erro na consulta. Detalhes: {e}")
+                print(f"Erro: Botão IMPRIMIR não encontrado ou falha no salvamento. Detalhes: {e}")
                 page.screenshot(path="sp_error.png")
                 print("Screenshot da tela de erro salva em 'sp_error.png'")
                 
