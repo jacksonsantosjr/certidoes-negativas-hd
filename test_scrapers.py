@@ -701,6 +701,180 @@ def testar_estadual_sp(cnpj):
             print("Instância do navegador fechada.")
 
 
+def obter_input_interativo(prompt, page, timeout_sec=120):
+    if not sys.stdin.isatty():
+        print(prompt, end="", flush=True)
+        return sys.stdin.readline().strip()
+        
+    import msvcrt
+    print(prompt, end="", flush=True)
+    user_input = ""
+    start_time = time.time()
+    
+    while time.time() - start_time < timeout_sec:
+        # Mantém o event loop do Playwright rodando para não dar timeout no CDP
+        page.wait_for_timeout(100)
+        
+        if msvcrt.kbhit():
+            char = msvcrt.getwche()
+            if char == '\r' or char == '\n':
+                print()  # Quebra de linha
+                break
+            elif char == '\b' or ord(char) == 8:  # Backspace
+                if len(user_input) > 0:
+                    user_input = user_input[:-1]
+                    # Limpa o caractere no console
+                    sys.stdout.write("\b \b")
+                    sys.stdout.flush()
+            elif ord(char) >= 32:  # Caracteres imprimíveis
+                user_input += char
+                
+    return user_input.strip()
+
+def tratar_desafio_prodam(page):
+    try:
+        # Check if the Prodam challenge field (#ans) is present
+        page.wait_for_selector("#ans", timeout=3000)
+    except:
+        return
+        
+    print("\n[DESAFIO PRODAM DETECTADO] Capturando imagem...")
+    captcha_img_path = "captcha_municipal_sp_prodam.png"
+    try:
+        page.locator("img").first.screenshot(path=captcha_img_path)
+        print(f"Imagem do CAPTCHA Prodam salva como '{captcha_img_path}'.")
+    except Exception as e:
+        print(f"Erro ao capturar imagem do CAPTCHA Prodam: {e}")
+        page.screenshot(path=captcha_img_path)
+        print(f"Screenshot geral salvo como '{captcha_img_path}'.")
+        
+    captcha_val = obter_input_interativo("Digite o CAPTCHA do desafio Prodam no terminal: ", page)
+    page.fill("#ans", captcha_val)
+    
+    # Click the submit button using a robust XPath selector
+    submit_xpath = 'xpath=//input[@type="submit"] | //input[@value="submit"] | //button[text()="submit"] | //input[@value="Submit"]'
+    page.click(submit_xpath)
+    print("Desafio enviado. Aguardando recarregamento...")
+    time.sleep(3)
+
+def testar_municipal_sp(cnpj):
+    print("\n--- TESTANDO CND MUNICIPAL SP (Prefeitura de São Paulo) ---")
+    url = "https://duc.prefeitura.sp.gov.br/certidoes/forms_anonimo/frmConsultaEmissaoCertificado.aspx"
+    print(f"Acessando: {url}")
+    
+    user_data_dir = os.path.abspath("./user_data_municipal_sp")
+    
+    with sync_playwright() as p:
+        browser, context = iniciar_e_conectar_chrome(p, user_data_dir, headless=False)
+        page = context.new_page()
+        
+        try:
+            page.goto(url)
+            time.sleep(3)
+            
+            # Dismiss cookies modal
+            cookie_btn = page.locator('text="Sair sem autorizar"')
+            if cookie_btn.count() > 0:
+                cookie_btn.click()
+                print("Modal de cookies fechado.")
+            time.sleep(1)
+            
+            # Trata desafio prodam se aparecer inicialmente
+            tratar_desafio_prodam(page)
+            
+            # Select "Certidão Tributária Mobiliária"
+            dropdown_xpath = 'xpath=//*[@id="ctl00_ConteudoPrincipal_ddlTipoCertidao"]'
+            page.wait_for_selector(dropdown_xpath, timeout=15000)
+            page.select_option(dropdown_xpath, label="Certidão Tributária Mobiliária")
+            print("Opção 'Certidão Tributária Mobiliária' selecionada.")
+            
+            # Trata desafio prodam se aparecer após a seleção (postback)
+            tratar_desafio_prodam(page)
+            
+            # Aguarda o campo de CNPJ ficar visível
+            cnpj_input_xpath = 'xpath=//*[@id="ctl00_ConteudoPrincipal_txtCNPJ"]'
+            page.wait_for_selector(cnpj_input_xpath, timeout=15000)
+            
+            cnpj_limpo = cnpj.replace(".", "").replace("/", "").replace("-", "")
+            page.click(cnpj_input_xpath)
+            page.fill(cnpj_input_xpath, cnpj_limpo)
+            print("CNPJ preenchido.")
+            
+            # Salva o CAPTCHA do formulário CND
+            captcha_img_xpath = 'xpath=//*[@id="ctl00_ConteudoPrincipal_imgCaptcha"]'
+            page.wait_for_selector(captcha_img_xpath, timeout=10000)
+            
+            captcha_img_path = "captcha_municipal_sp.png"
+            page.locator(captcha_img_xpath).screenshot(path=captcha_img_path)
+            print(f"Imagem do CAPTCHA Municipal SP salva como '{captcha_img_path}'.")
+            
+            # Pede para o usuário digitar o CAPTCHA
+            captcha_val = obter_input_interativo("Digite o CAPTCHA de 4 ou 5 caracteres no terminal e pressione ENTER: ", page)
+            
+            captcha_input_xpath = 'xpath=//*[@id="ctl00_ConteudoPrincipal_txtValorCaptcha"]'
+            page.fill(captcha_input_xpath, captcha_val)
+            print("CAPTCHA preenchido. Clicando em Emitir...")
+            
+            emitir_btn_xpath = 'xpath=//*[@id="ctl00_ConteudoPrincipal_btnEmitir"]'
+            page.wait_for_selector(emitir_btn_xpath, timeout=10000)
+            
+            # Clica em Emitir e intercepta o download do PDF
+            try:
+                with page.expect_download(timeout=25000) as download_info:
+                    page.click(emitir_btn_xpath)
+                
+                download = download_info.value
+                temp_pdf_path = f"temp_municipal_sp_{cnpj}.pdf"
+                download.save_as(temp_pdf_path)
+                print(f"PDF real da certidão Municipal SP salvo com sucesso em {temp_pdf_path}")
+                
+                # Screenshot de sucesso para controle
+                page.screenshot(path="resultado_municipal_sp.png")
+                print("Print screen salvo como 'resultado_municipal_sp.png'")
+                
+            except Exception as d_err:
+                print(f"Erro ou timeout no download automático: {d_err}")
+                # Captura erro para diagnóstico
+                page.screenshot(path="municipal_sp_error.png")
+                print("Screenshot do erro salvo como 'municipal_sp_error.png'")
+                raise d_err
+                
+            # Aguarda 3 segundos e clica no botão Fechar Modal
+            time.sleep(3)
+            fechar_modal_xpath = 'xpath=//*[@id="btnFecharModalCertidoes"]'
+            try:
+                if page.locator(fechar_modal_xpath).is_visible():
+                    page.click(fechar_modal_xpath)
+                    print("Modal de encerramento fechado com sucesso.")
+            except Exception as f_err:
+                print(f"Aviso ao tentar fechar o modal: {f_err}")
+                
+        except Exception as e:
+            print(f"Erro no teste Municipal SP: {e}")
+            try:
+                page.screenshot(path="municipal_sp_error.png")
+                print("Screenshot do erro salvo em 'municipal_sp_error.png'")
+            except:
+                pass
+        finally:
+            if 'page' in locals():
+                try:
+                    # Envia comando CDP para fechar toda a instância do navegador
+                    client = page.context.new_cdp_session(page)
+                    client.send("Browser.close")
+                except:
+                    pass
+                try: page.close()
+                except: pass
+            if 'context' in locals():
+                try: context.close()
+                except: pass
+            if 'browser' in locals():
+                try: browser.close()
+                except: pass
+            print("Instância do navegador fechada.")
+
+
 def treinar_perfil_federal():
     print("\n--- TREINAMENTO MANUAL DO PERFIL CND FEDERAL ---")
     print("Vou abrir o Chrome com o perfil persistente dedicado.")
@@ -744,13 +918,14 @@ if __name__ == "__main__":
     print("2 - CND FGTS (Caixa)")
     print("3 - CNDT Trabalhista (TST)")
     print("4 - CND Estadual SP")
-    print("5 - Testar Todos")
-    print("6 - Treinar Perfil CND Federal (Manual)")
+    print("5 - CND Municipal SP")
+    print("6 - Testar Todos")
+    print("7 - Treinar Perfil CND Federal (Manual)")
     
-    opcao = input("\nDigite a opção desejada (1-6): ").strip()
+    opcao = input("\nDigite a opção desejada (1-7): ").strip()
     
     # Solicita o CNPJ (exceto para treinamento de perfil)
-    if opcao in ["1", "2", "3", "4", "5"]:
+    if opcao in ["1", "2", "3", "4", "5", "6"]:
         cnpj_teste = input("Digite o CNPJ (apenas números): ").strip().replace(".", "").replace("/", "").replace("-", "")
         if len(cnpj_teste) != 14:
             print("CNPJ inválido! Deve conter 14 dígitos.")
@@ -768,11 +943,14 @@ if __name__ == "__main__":
     elif opcao == "4":
         testar_estadual_sp(cnpj_teste)
     elif opcao == "5":
+        testar_municipal_sp(cnpj_teste)
+    elif opcao == "6":
         testar_federal(cnpj_teste)
         testar_fgts(cnpj_teste)
         testar_cndt(cnpj_teste)
         testar_estadual_sp(cnpj_teste)
-    elif opcao == "6":
+        testar_municipal_sp(cnpj_teste)
+    elif opcao == "7":
         treinar_perfil_federal()
     else:
         print("Opção inválida.")
