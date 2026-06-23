@@ -217,9 +217,10 @@ function renderizarDashboardTable() {
     
     let filtered = certidoesData.filter(c => {
         const empresa = c.empresas || {};
+        const queryClean = query.replace(/\D/g, '');
         const matchQuery = (empresa.razao_social || '').toLowerCase().includes(query) ||
                            (empresa.apelido || '').toLowerCase().includes(query) ||
-                           (empresa.cnpj || '').includes(query);
+                           (queryClean && (empresa.cnpj || '').includes(queryClean));
                            
         const matchTipo = tipo === 'ALL' || c.tipo_certidao === tipo;
         const matchStatus = status === 'ALL' || c.status === status;
