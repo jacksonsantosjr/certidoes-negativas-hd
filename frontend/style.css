@@ -117,7 +117,6 @@ body {
     grid-template-columns: 78px 1fr;
 }
 
-.app-container.collapsed .logo-text,
 .app-container.collapsed .nav-item span,
 .app-container.collapsed .theme-toggle span {
     display: none;
@@ -147,13 +146,42 @@ body {
 .sidebar-header {
     display: flex;
     align-items: center;
-    gap: 12px;
     margin-bottom: 40px;
+}
+
+.logo-text {
+    display: flex;
+    flex-direction: column;
+    margin-left: 12px;
+    opacity: 1;
+    max-width: 150px;
+    white-space: nowrap;
+    overflow: hidden;
+    transition: opacity 0.3s cubic-bezier(0.4, 0, 0.2, 1), 
+                max-width 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+                margin-left 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.app-container.collapsed .logo-text {
+    opacity: 0;
+    max-width: 0;
+    margin-left: 0;
 }
 
 .logo-icon {
     font-size: 28px;
     color: var(--color-primary);
+}
+
+.logo-image {
+    height: 42px;
+    width: auto;
+    object-fit: contain;
+    transition: all 0.3s ease;
+}
+
+.app-container.collapsed .logo-image {
+    height: 28px;
 }
 
 .logo-text h1 {
