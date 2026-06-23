@@ -232,6 +232,23 @@ def emitir_cnd_federal(cnpj):
             sucesso_selector = "iframe:not([src*='hcaptcha']):not([src*='google']), embed, object, [href*='.pdf']"
             erro_selector = ".alert, .error, .message-error, .mensagem-erro, #mensagemErro, .br-message, .feedback, .invalid-feedback"
             
+            downloaded = False
+            # Se for a primeira emissão (nunca solicitada antes), a página pode exibir o link de download alternativo direto
+            link_download_alternativo = 'a:has-text("download do documento PDF da certidão")'
+            if page.locator(link_download_alternativo).is_visible():
+                logger.info("Página de emissão de primeira certidão detectada (sem PDF embutido). Clicando no link alternativo...")
+                try:
+                    with page.expect_download(timeout=10000) as download_info:
+                        page.click(link_download_alternativo)
+                    download = download_info.value
+                    download.save_as(temp_pdf_path)
+                    logger.info(f"PDF real da certidão baixado e salvo com sucesso em: {temp_pdf_path}")
+                    # Injeta elemento de sucesso no DOM para que o sucesso_selector seja satisfeito
+                    page.evaluate('() => { const embed = document.createElement("embed"); embed.id = "mock-success-pdf"; document.body.appendChild(embed); }')
+                    downloaded = True
+                except Exception as d_err:
+                    logger.error(f"Erro ao baixar o PDF pelo link de download alternativo: {d_err}")
+            
             try:
                 page.wait_for_selector(f"{sucesso_selector}, {erro_selector}, div:has-text('insuficientes')", timeout=5000)
             except Exception:
@@ -269,9 +286,10 @@ def emitir_cnd_federal(cnpj):
             if "Não foi possível concluir" in body_text:
                 raise Exception("Erro no portal da Receita Federal: Não foi possível concluir a ação para o contribuinte informado. Por favor, tente novamente dentro de alguns minutos.")
             
-            # Cria arquivo mock para simular emissão
-            with open(temp_pdf_path, "wb") as f:
-                f.write(b"MOCK PDF CONTENT - CERTIDAO FEDERAL CNPJ " + cnpj.encode('utf-8'))
+            # Cria arquivo mock para simular emissão se não foi baixado o PDF real
+            if not downloaded:
+                with open(temp_pdf_path, "wb") as f:
+                    f.write(b"MOCK PDF CONTENT - CERTIDAO FEDERAL CNPJ " + cnpj.encode('utf-8'))
                 
             data_vencimento = (datetime.now() + timedelta(days=180)).strftime("%Y-%m-%d")
             return temp_pdf_path, data_vencimento
