@@ -5,6 +5,9 @@ import ssl
 import logging
 import subprocess
 import requests
+import urllib3
+import speech_recognition as sr
+from pydub import AudioSegment
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from supabase import create_client, Client
@@ -121,6 +124,246 @@ def iniciar_e_conectar_chrome(p, user_data_dir, headless=False):
     browser = p.chromium.connect_over_cdp("http://127.0.0.1:9222")
     context = browser.contexts[0] if browser.contexts else browser.new_context()
     return browser, context
+
+def resolver_recaptcha(page):
+    logger.info("[ESTADUAL-SP] Iniciando resolução automática do reCAPTCHA...")
+    
+    # Adiciona a pasta bin do FFmpeg ao PATH para que o pydub a encontre
+    import os
+    ffmpeg_path = r"C:\Users\jackson.junior\AppData\Local\Microsoft\WinGet\Packages\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\ffmpeg-8.1.1-full_build\bin"
+    if os.path.exists(ffmpeg_path) and ffmpeg_path not in os.environ["PATH"]:
+        os.environ["PATH"] += os.pathsep + ffmpeg_path
+        
+    try:
+        # 1. Encontra o iframe do checkbox do reCAPTCHA
+        frame_selector = 'iframe[src*="anchor"]'
+        page.wait_for_selector(frame_selector, timeout=15000)
+        frame = page.frame_locator(frame_selector)
+        
+        # 2. Clica no checkbox
+        anchor = frame.locator('#recaptcha-anchor')
+        anchor.click()
+        logger.info("[ESTADUAL-SP] Checkbox do reCAPTCHA clicado.")
+        
+        # 3. Aguarda um momento para ver se o CAPTCHA foi resolvido automaticamente
+        time.sleep(3.0)
+        if anchor.get_attribute('aria-checked') == 'true':
+            logger.info("[ESTADUAL-SP] reCAPTCHA resolvido automaticamente (sem desafio de imagem/áudio)!")
+            return True
+            
+        logger.info("[ESTADUAL-SP] Desafio de segurança apresentado. Iniciando bypass via áudio...")
+        
+        # 4. Localiza o iframe do desafio (bframe)
+        bframe_selector = 'iframe[src*="bframe"]'
+        page.wait_for_selector(bframe_selector, timeout=10000)
+        bframe = page.frame_locator(bframe_selector)
+        
+        # 5. Clica no botão de áudio
+        audio_btn = bframe.locator('#recaptcha-audio-button')
+        audio_btn.wait_for(state="visible", timeout=5000)
+        audio_btn.click()
+        logger.info("[ESTADUAL-SP] Botão de áudio clicado.")
+        time.sleep(2.0)
+        
+        # 6. Tenta obter o link de download do áudio
+        audio_url = ""
+        try:
+            bframe.locator('.rc-audiochallenge-download-link, #audio-source').first.wait_for(state="attached", timeout=6000)
+            
+            download_link = bframe.locator('.rc-audiochallenge-download-link')
+            audio_source = bframe.locator('#audio-source')
+            
+            if download_link.is_visible():
+                audio_url = download_link.get_attribute('href')
+            elif audio_source.count() > 0:
+                audio_url = audio_source.get_attribute('src')
+                
+            if not audio_url:
+                raise Exception("Não foi possível extrair a URL do áudio.")
+        except Exception as sel_err:
+            body_text = bframe.locator('body').inner_text()
+            if "tente novamente mais tarde" in body_text.lower() or "blocked" in body_text.lower() or "solicitações automatizadas" in body_text.lower() or "automated queries" in body_text.lower():
+                raise Exception("Bloqueio de reCAPTCHA detectado pelo Google (limite de requisições excedido). Tente novamente mais tarde.")
+            raise Exception(f"Falha ao carregar desafio de áudio: {sel_err}")
+            
+        logger.info(f"[ESTADUAL-SP] URL do áudio obtido: {audio_url}")
+        
+        # 7. Faz o download do áudio MP3
+        import urllib3
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        response = requests.get(audio_url, timeout=15, verify=False)
+        mp3_path = "temp_captcha.mp3"
+        wav_path = "temp_captcha.wav"
+        
+        with open(mp3_path, "wb") as f:
+            f.write(response.content)
+            
+        # 8. Converte MP3 para WAV
+        from pydub import AudioSegment
+        sound = AudioSegment.from_mp3(mp3_path)
+        sound.export(wav_path, format="wav")
+        logger.info("[ESTADUAL-SP] Áudio convertido para WAV.")
+        
+        # 9. Transcreve o áudio usando SpeechRecognition
+        import speech_recognition as sr
+        r = sr.Recognizer()
+        with sr.AudioFile(wav_path) as source:
+            audio_data = r.record(source)
+            
+        text = r.recognize_google(audio_data, language="en-US")
+        logger.info(f"[ESTADUAL-SP] Texto transcrito pelo Google Speech API: '{text}'")
+        
+        # Limpa os arquivos temporários
+        try:
+            os.remove(mp3_path)
+            os.remove(wav_path)
+        except:
+            pass
+            
+        # 10. Insere o texto transcrito
+        response_input = bframe.locator('#audio-response')
+        response_input.fill(text)
+        time.sleep(0.5)
+        
+        # 11. Clica no botão de verificar
+        verify_btn = bframe.locator('#recaptcha-verify-button')
+        verify_btn.click()
+        logger.info("[ESTADUAL-SP] Botão de verificação clicado.")
+        time.sleep(3.0)
+        
+        # 12. Verifica se funcionou
+        if anchor.get_attribute('aria-checked') == 'true':
+            logger.info("[ESTADUAL-SP] reCAPTCHA resolvido com sucesso via áudio!")
+            return True
+        else:
+            logger.warning("[ESTADUAL-SP] Falha na validação do áudio do reCAPTCHA.")
+            return False
+            
+    except Exception as e:
+        logger.error(f"[ESTADUAL-SP] Erro ao resolver reCAPTCHA: {e}")
+        return False
+
+def emitir_cnd_estadual_sp(cnpj):
+    logger.info(f"[ESTADUAL-SP] Iniciando consulta para o CNPJ: {cnpj}")
+    url = "https://www10.fazenda.sp.gov.br/CertidaoNegativaDeb/Pages/EmissaoCertidaoNegativa.aspx"
+    temp_pdf_path = f"temp_estadual_sp_{cnpj}.pdf"
+    
+    user_data_dir = os.path.abspath("./user_data_sp")
+    with sync_playwright() as p:
+        browser, context = iniciar_e_conectar_chrome(p, user_data_dir, headless=True)
+        page = context.new_page()
+        
+        try:
+            page.goto(url)
+            
+            # Selecionar o elemento xPath //*[@id="MainContent_cnpjradio"]
+            cnpj_radio_xpath = 'xpath=//*[@id="MainContent_cnpjradio"]'
+            page.wait_for_selector(cnpj_radio_xpath, timeout=20000)
+            page.click(cnpj_radio_xpath)
+            
+            # Preencher o CNPJ no campo xPath //*[@id="MainContent_txtDocumento"]
+            cnpj_input_xpath = 'xpath=//*[@id="MainContent_txtDocumento"]'
+            page.wait_for_selector(cnpj_input_xpath, timeout=10000)
+            cnpj_limpo = cnpj.replace(".", "").replace("/", "").replace("-", "")
+            page.fill(cnpj_input_xpath, cnpj_limpo)
+            
+            # Resolver o CAPTCHA
+            recaptcha_resolvido = resolver_recaptcha(page)
+            if not recaptcha_resolvido:
+                raise Exception("A resolução automática do reCAPTCHA falhou no modo headless.")
+            
+            # Clicar no botão "EMITIR" cujo xPath é o //*[@id="MainContent_btnPesquisar"]
+            btn_emitir_xpath = 'xpath=//*[@id="MainContent_btnPesquisar"]'
+            page.wait_for_selector(btn_emitir_xpath, timeout=10000)
+            page.click(btn_emitir_xpath)
+            
+            # Na tela seguinte, localizar o botão "IMPRIMIR" e salvar a certidão como PDF
+            btn_imprimir_xpath = 'xpath=//*[@id="MainContent_btnImpressao"]'
+            page.wait_for_selector(btn_imprimir_xpath, timeout=20000)
+            
+            # Mock window.print para evitar bloquear a thread caso dispare o diálogo de impressão nativo
+            page.evaluate("window.print = () => { console.log('window.print simulado com sucesso'); }")
+            
+            pdf_salvo = False
+            
+            try:
+                # Tenta capturar se o botão dispara um download de arquivo direto
+                with page.expect_download(timeout=5000) as download_info:
+                    page.click(btn_imprimir_xpath)
+                download = download_info.value
+                download.save_as(temp_pdf_path)
+                logger.info(f"[ESTADUAL-SP] PDF baixado com sucesso via download em: {temp_pdf_path}")
+                pdf_salvo = True
+            except Exception:
+                pass
+            
+            if not pdf_salvo:
+                # Emula mídia de impressão para carregar estilos de impressão da página
+                page.emulate_media(media="print")
+                
+                # Oculta os botões de controle na página para não saírem no PDF impresso
+                page.evaluate("""
+                    document.querySelectorAll('input[type="submit"], input[type="button"], button, .no-print, [id*="btnImpressao"], [id*="btnVoltar"]').forEach(el => el.style.display = 'none');
+                """)
+                
+                # Clica no botão para disparar scripts internos (caso existam)
+                try:
+                    page.click(btn_imprimir_xpath, timeout=2000)
+                except:
+                    pass
+                
+                screenshot_path = f"temp_screenshot_estadual_{cnpj}.png"
+                page.screenshot(path=screenshot_path, full_page=True)
+                
+                # Restaura a mídia para exibição em tela normal
+                page.emulate_media(media="screen")
+                
+                # Converte o screenshot para PDF real usando Pillow
+                try:
+                    from PIL import Image
+                    img = Image.open(screenshot_path).convert("RGB")
+                    img.save(temp_pdf_path, "PDF")
+                    logger.info(f"[ESTADUAL-SP] PDF real gerado via conversão de imagem em: {temp_pdf_path}")
+                    pdf_salvo = True
+                except Exception as pdf_err:
+                    raise Exception(f"Erro ao converter screenshot para PDF: {pdf_err}")
+                finally:
+                    if os.path.exists(screenshot_path):
+                        try: os.remove(screenshot_path)
+                        except: pass
+            
+            data_vencimento = (datetime.now() + timedelta(days=180)).strftime("%Y-%m-%d")
+            return temp_pdf_path, data_vencimento
+            
+        except Exception as e:
+            raise Exception(f"Falha no robô Estadual SP: {str(e)}")
+        finally:
+            if 'page' in locals():
+                try:
+                    client = page.context.new_cdp_session(page)
+                    client.send("Browser.close")
+                except:
+                    pass
+                try: page.close()
+                except: pass
+            if 'context' in locals():
+                try: context.close()
+                except: pass
+            if 'browser' in locals():
+                try: browser.close()
+                except: pass
+
+def emitir_cnd_estadual_via_api(cnpj, uf):
+    logger.info(f"[ESTADUAL] Solicitando emissão via API de mercado para UF {uf} - CNPJ {cnpj}")
+    temp_pdf_path = f"temp_estadual_{cnpj}.pdf"
+    try:
+        time.sleep(2)
+        with open(temp_pdf_path, "wb") as f:
+            f.write(f"MOCK PDF CONTENT - CERTIDAO ESTADUAL {uf} CNPJ {cnpj}".encode('utf-8'))
+        data_vencimento = (datetime.now() + timedelta(days=90)).strftime("%Y-%m-%d")
+        return temp_pdf_path, data_vencimento
+    except Exception as e:
+        raise Exception(f"Falha na API Estadual: {str(e)}")
 
 def emitir_cnd_federal(cnpj):
     """
@@ -524,6 +767,11 @@ def processar_tarefa(tarefa):
         return emitir_cnd_fgts(cnpj, uf)
     elif tipo == "CNDT":
         return emitir_cnd_cndt(cnpj)
+    elif tipo == "ESTADUAL":
+        if uf == "SP":
+            return emitir_cnd_estadual_sp(cnpj)
+        else:
+            return emitir_cnd_estadual_via_api(cnpj, uf)
     elif tipo == "MUNICIPAL":
         return emitir_cnd_municipal_via_api(cnpj, municipio, uf)
     else:

@@ -701,6 +701,7 @@ function abrirModalEdicao(id) {
     document.getElementById('cert-federal').checked = activeTypes.includes('FEDERAL');
     document.getElementById('cert-fgts').checked = activeTypes.includes('FGTS');
     document.getElementById('cert-cndt').checked = activeTypes.includes('CNDT');
+    document.getElementById('cert-estadual').checked = activeTypes.includes('ESTADUAL');
     document.getElementById('cert-municipal').checked = activeTypes.includes('MUNICIPAL');
     
     dom.modalEmpresa.classList.add('active');
@@ -718,6 +719,7 @@ function configurarModais() {
         document.getElementById('cert-federal').checked = true;
         document.getElementById('cert-fgts').checked = true;
         document.getElementById('cert-cndt').checked = true;
+        document.getElementById('cert-estadual').checked = true;
         document.getElementById('cert-municipal').checked = true;
         
         dom.modalEmpresa.classList.add('active');
@@ -797,6 +799,7 @@ function configurarModais() {
         document.getElementById('cert-federal').checked = true;
         document.getElementById('cert-fgts').checked = true;
         document.getElementById('cert-cndt').checked = true;
+        document.getElementById('cert-estadual').checked = true;
         document.getElementById('cert-municipal').checked = true;
     };
     
@@ -825,6 +828,7 @@ function configurarModais() {
         if (document.getElementById('cert-federal').checked) tiposSelecionados.push('FEDERAL');
         if (document.getElementById('cert-fgts').checked) tiposSelecionados.push('FGTS');
         if (document.getElementById('cert-cndt').checked) tiposSelecionados.push('CNDT');
+        if (document.getElementById('cert-estadual').checked) tiposSelecionados.push('ESTADUAL');
         if (document.getElementById('cert-municipal').checked) tiposSelecionados.push('MUNICIPAL');
 
         if (tiposSelecionados.length === 0) {
