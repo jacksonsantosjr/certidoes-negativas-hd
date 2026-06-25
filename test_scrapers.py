@@ -6,6 +6,10 @@ import requests
 from playwright.sync_api import sync_playwright
 import speech_recognition as sr
 from pydub import AudioSegment
+import numpy as np
+import cv2
+import ddddocr
+from PIL import Image
 
 def get_chrome_path():
     paths = [
@@ -18,42 +22,91 @@ def get_chrome_path():
             return p
     return "chrome.exe"
 
-def iniciar_e_conectar_chrome(p, user_data_dir, headless=False):
-    chrome_running = False
+def limpar_chrome_rpa():
+    import subprocess
     try:
-        response = requests.get("http://127.0.0.1:9222/json/version", timeout=2)
-        if response.status_code == 200:
-            chrome_running = True
-            print("Instância do Chrome na porta 9222 já está rodando. Conectando...")
+        # Finaliza qualquer processo chrome.exe que contenha a porta 9222 na linha de comando
+        subprocess.run(
+            'wmic process where "name=\'chrome.exe\' and CommandLine like \'%remote-debugging-port=9222%\'" call terminate',
+            shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+        time.sleep(1.0)
     except Exception:
         pass
-        
-    if not chrome_running:
-        chrome_path = get_chrome_path()
-        print(f"Iniciando Chrome nativo em: {chrome_path} (headless={headless})")
-        chrome_args = [
-            chrome_path,
-            "--remote-debugging-port=9222",
-            f"--user-data-dir={user_data_dir}",
-            "--no-first-run",
-            "--no-default-browser-check"
-        ]
-        if headless:
-            chrome_args.append("--headless=new")
-        subprocess.Popen(chrome_args)
-        
-        # Aguarda até 5 segundos ou até a porta 9222 responder
-        for _ in range(10):
-            time.sleep(0.5)
-            try:
-                response = requests.get("http://127.0.0.1:9222/json/version", timeout=1)
-                if response.status_code == 200:
-                    break
-            except Exception:
-                pass
-        
-    browser = p.chromium.connect_over_cdp("http://127.0.0.1:9222")
-    context = browser.contexts[0] if browser.contexts else browser.new_context()
+
+
+class PersistentBrowser:
+    def __init__(self, context):
+        self.context = context
+    def close(self):
+        try:
+            self.context.close()
+        except Exception:
+            pass
+
+
+class NetworkError(Exception):
+    pass
+
+
+def verificar_erro_rede(page):
+    try:
+        body_text = page.locator("body").inner_text().lower()
+        if "err_empty_response" in body_text or "não está funcionando" in body_text or "nenhum dado foi enviado" in body_text:
+            raise NetworkError("Erro de rede detectado (ERR_EMPTY_RESPONSE / Página não está funcionando).")
+    except NetworkError:
+        raise
+    except Exception:
+        pass
+
+
+def goto_with_retry(page, url, max_retries=3, timeout=30000):
+    for i in range(1, max_retries + 1):
+        try:
+            print(f"Acessando {url} (tentativa {i}/{max_retries})...")
+            response = page.goto(url, timeout=timeout)
+            if response and response.status < 400:
+                body_text = page.locator("body").inner_text().lower()
+                if "err_empty_response" in body_text or "não está funcionando" in body_text or "nenhum dado foi enviado" in body_text:
+                    raise NetworkError("Erro de página vazia no corpo (ERR_EMPTY_RESPONSE).")
+                return response
+            else:
+                raise Exception(f"Código de status HTTP inválido: {response.status if response else 'Sem Resposta'}")
+        except Exception as e:
+            print(f"Erro ao acessar {url} (tentativa {i}/{max_retries}): {e}")
+            if i < max_retries:
+                time.sleep(3)
+            else:
+                raise e
+
+
+def iniciar_e_conectar_chrome(p, user_data_dir, headless=False):
+    print(f"Iniciando Playwright Chromium Stealth (headless={headless}, user_data_dir={user_data_dir})")
+    
+    # Garante o encerramento de processos travados
+    limpar_chrome_rpa()
+    
+    user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    
+    context = p.chromium.launch_persistent_context(
+        user_data_dir,
+        headless=headless,
+        user_agent=user_agent,
+        viewport={"width": 1280, "height": 800},
+        locale="pt-BR",
+        timezone_id="America/Sao_Paulo",
+        accept_downloads=True
+    )
+    
+    # Injeta propriedades stealth para evitar detecção automatizada
+    context.add_init_script("""
+        Object.defineProperty(navigator, 'webdriver', { get: () => false });
+        Object.defineProperty(navigator, 'languages', { get: () => ['pt-BR', 'pt', 'en-US', 'en'] });
+        Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+        window.chrome = { runtime: {} };
+    """)
+    
+    browser = PersistentBrowser(context)
     return browser, context
 
 def testar_federal(cnpj):
@@ -908,6 +961,626 @@ def treinar_perfil_federal():
         
         print("\nNavegador fechado. Perfil treinado e salvo!")
         context.close()
+
+
+def tratar_desafio_prodam_auto(page, ocr, max_tentativas=5):
+    for tentativa in range(1, max_tentativas + 1):
+        try:
+            # Verifica se o campo do desafio (#ans) está na tela
+            page.wait_for_selector("#ans", timeout=3000)
+        except:
+            return # Se não encontrar, o desafio não está presente
+            
+        print(f"    [DESAFIO PRODAM] Resolvendo automaticamente - tentativa {tentativa}/{max_tentativas}...")
+        try:
+            img_el = page.locator("img").first
+            img_el.wait_for(state="visible", timeout=5000)
+            img_bytes = img_el.screenshot()
+            if not img_bytes:
+                raise Exception("Screenshot de elemento vazio")
+        except Exception:
+            # Fallback tirando print da tela e lendo (caso o seletor da imagem falhe)
+            temp_img_path = "temp_prodam.png"
+            page.screenshot(path=temp_img_path)
+            with open(temp_img_path, "rb") as f:
+                img_bytes = f.read()
+            if os.path.exists(temp_img_path):
+                os.remove(temp_img_path)
+                
+        captcha_val = ocr.classification(img_bytes)
+        captcha_val = "".join([c for c in captcha_val if c.isascii() and c.isalnum()])
+        print(f"        ddddocr leu: '{captcha_val}'")
+        
+        page.fill("#ans", "")
+        page.fill("#ans", captcha_val)
+        
+        submit_xpath = 'xpath=//input[@type="submit"] | //input[@value="submit"] | //button[text()="submit"] | //input[@value="Submit"]'
+        page.click(submit_xpath)
+        time.sleep(2)
+
+
+def obter_fgts(cnpj, uf="SP", headless=True):
+    print(f"[FGTS] Iniciando emissão para o CNPJ: {cnpj}...")
+    url = "https://consulta-crf.caixa.gov.br/consultacrf/pages/consultaEmpregador.jsf"
+    
+    user_data_dir = os.path.abspath("./user_data_fgts")
+    cnpj_limpo = cnpj.replace(".", "").replace("/", "").replace("-", "")
+    temp_pdf_path = os.path.abspath(f"temp_fgts_{cnpj_limpo}.pdf")
+    
+    with sync_playwright() as p:
+        browser, context = iniciar_e_conectar_chrome(p, user_data_dir, headless=headless)
+        page = context.new_page()
+        
+        try:
+            goto_with_retry(page, url)
+            cnpj_selector = 'xpath=//*[@id="mainForm:txtInscricao1"]'
+            uf_selector = 'xpath=//*[@id="mainForm:uf"]'
+            btn_selector = 'xpath=//*[@id="mainForm:btnConsultar"]'
+            
+            page.wait_for_selector(cnpj_selector, timeout=20000)
+            
+            page.fill(cnpj_selector, cnpj_limpo)
+            page.select_option(uf_selector, value=uf)
+            page.click(btn_selector)
+            
+            sucesso_selector = '[id="mainForm:j_id76"]'
+            erro_selector = ".msgErro, .erro, [id='mainForm:mensagens']"
+            
+            page.wait_for_selector(f"{sucesso_selector}, {erro_selector}", timeout=20000)
+            
+            elementos_erro = page.query_selector_all(erro_selector)
+            for el in elementos_erro:
+                if el.is_visible():
+                    erro_msg = el.inner_text().strip()
+                    if erro_msg:
+                        return {"status": "erro", "mensagem": f"Erro no portal da Caixa: {erro_msg}"}
+            
+            if page.query_selector(sucesso_selector):
+                page.click(sucesso_selector)
+                
+                btn_visualizar = '[id="mainForm:btnVisualizar"]'
+                page.wait_for_selector(btn_visualizar, timeout=15000)
+                page.click(btn_visualizar)
+                
+                btn_imprimir = '[id="mainForm:btImprimir4"]'
+                page.wait_for_selector(btn_imprimir, timeout=15000)
+                
+                page.evaluate("window.print = () => {}")
+                page.click(btn_imprimir)
+                page.emulate_media(media="print")
+                page.evaluate("""
+                    document.querySelectorAll('input[type="submit"], input[type="button"], button, .no-print, [id*="btnVoltar"], [id*="btImprimir"]').forEach(el => el.style.display = 'none');
+                """)
+                
+                screenshot_path = os.path.abspath(f"temp_screenshot_fgts_{cnpj_limpo}.png")
+                page.screenshot(path=screenshot_path, full_page=True)
+                page.emulate_media(media="screen")
+                
+                img = Image.open(screenshot_path).convert("RGB")
+                img.save(temp_pdf_path, "PDF")
+                
+                if os.path.exists(screenshot_path):
+                    os.remove(screenshot_path)
+                    
+                return {"status": "sucesso", "pdf_path": temp_pdf_path}
+            else:
+                return {"status": "erro", "mensagem": "Não foi possível localizar o link do CRF após a consulta."}
+                
+        except Exception as e:
+            return {"status": "erro", "mensagem": str(e)}
+        finally:
+            if 'page' in locals():
+                try:
+                    client = page.context.new_cdp_session(page)
+                    client.send("Browser.close")
+                except:
+                    pass
+                try: page.close()
+                except: pass
+            if 'context' in locals():
+                try: context.close()
+                except: pass
+            if 'browser' in locals():
+                try: browser.close()
+                except: pass
+
+
+def obter_federal(cnpj, user_data_dir=None, headless=True):
+    print(f"[FEDERAL] Iniciando emissão para o CNPJ: {cnpj}...")
+    url = "https://servicos.receitafederal.gov.br/servico/certidoes/#/home/cnpj"
+    
+    if not user_data_dir:
+        user_data_dir = os.path.abspath("./user_data_receita")
+        
+    cnpj_limpo = cnpj.replace(".", "").replace("/", "").replace("-", "")
+    temp_pdf_path = os.path.abspath(f"temp_federal_{cnpj_limpo}.pdf")
+    
+    with sync_playwright() as p:
+        browser, context = iniciar_e_conectar_chrome(p, user_data_dir, headless=headless)
+        page = context.new_page()
+        
+        try:
+            goto_with_retry(page, url)
+            
+            cnpj_selector = 'input[name="niContribuinte"]'
+            try:
+                page.wait_for_selector(cnpj_selector, timeout=15000)
+            except Exception:
+                cnpj_selector = 'input[placeholder="Informe o CNPJ"]'
+                try:
+                    page.wait_for_selector(cnpj_selector, timeout=5000)
+                except Exception:
+                    cnpj_selector = 'xpath=//*[@id="id3f4c9ab5e7e9d4"]'
+                    page.wait_for_selector(cnpj_selector, timeout=10000)
+            
+            time.sleep(1.0)
+            page.focus(cnpj_selector)
+            page.click(cnpj_selector)
+            page.type(cnpj_selector, cnpj_limpo, delay=60)
+            page.press(cnpj_selector, "Tab")
+            time.sleep(1.0)
+            
+            try:
+                btn_cookies = 'button:has-text("Aceitar")'
+                if page.locator(btn_cookies).is_visible():
+                    page.click(btn_cookies)
+                    time.sleep(1.0)
+            except:
+                pass
+                
+            btn_selector = 'button:has-text("Emitir Certidão")'
+            try:
+                page.wait_for_selector(btn_selector, timeout=10000)
+            except Exception:
+                btn_selector = 'xpath=/html/body/app-root/mf-portal-layout/portal-main-layout/div/main/ng-component/ng-component/app-coleta-parametros-pj/app-coleta-parametros-template/form/div[2]/div[2]/button[2]'
+                page.wait_for_selector(btn_selector, timeout=5000)
+                
+            page.click(btn_selector)
+            time.sleep(1.0)
+            
+            try:
+                btn_xpath = 'xpath=/html/body/modal-container/div[2]/div/div[3]/button[2]'
+                btn_texto = 'button:has-text("Emitir Nova Certidão")'
+                
+                try:
+                    page.wait_for_selector('modal-container', timeout=10000)
+                except:
+                    page.wait_for_selector(btn_xpath, timeout=3000)
+                    
+                time.sleep(1.0)
+                if page.locator(btn_xpath).is_visible():
+                    page.click(btn_xpath)
+                elif page.locator(btn_texto).is_visible():
+                    page.click(btn_texto)
+                else:
+                    page.click(btn_xpath, force=True, timeout=3000)
+                time.sleep(1.0)
+            except:
+                pass
+                
+            sucesso_selector = "iframe:not([src*='hcaptcha']):not([src*='google']), embed, object, [href*='.pdf']"
+            erro_selector = ".alert, .error, .message-error, .mensagem-erro, #mensagemErro, .br-message, .feedback, .invalid-feedback"
+            
+            link_download_alternativo = 'a:has-text("download do documento PDF da certidão")'
+            if page.locator(link_download_alternativo).is_visible():
+                try:
+                    with page.expect_download(timeout=10000) as download_info:
+                        page.click(link_download_alternativo)
+                    download = download_info.value
+                    download.save_as(temp_pdf_path)
+                    return {"status": "sucesso", "pdf_path": temp_pdf_path}
+                except Exception as d_err:
+                    print(f"Erro ao baixar o PDF pelo link alternativo: {d_err}")
+            
+            try:
+                page.wait_for_selector(f"{sucesso_selector}, {erro_selector}, div:has-text('insuficientes')", timeout=8000)
+            except Exception:
+                body_text = page.locator("body").inner_text()
+                if "insuficientes" not in body_text and "Não foi possível concluir" not in body_text:
+                    raise Exception("Timeout aguardando resultado do portal Federal.")
+            
+            elementos_erro = page.query_selector_all(erro_selector)
+            for el in elementos_erro:
+                if el.is_visible():
+                    erro_msg = el.inner_text().strip()
+                    if erro_msg:
+                        return {"status": "erro", "mensagem": f"Erro no portal da Receita Federal: {erro_msg}"}
+            
+            body_text = page.locator("body").inner_text()
+            if "insuficientes" in body_text:
+                return {"status": "erro", "mensagem": "As informações disponíveis na Receita Federal sobre o contribuinte são insuficientes para emitir a certidão pela Internet."}
+            if "Não foi possível concluir" in body_text:
+                return {"status": "erro", "mensagem": "Não foi possível concluir a ação para o contribuinte informado. Tente novamente em alguns minutos."}
+                
+            if page.query_selector(sucesso_selector):
+                print("PDF renderizado em tela. Gerando PDF...")
+                try:
+                    page.pdf(path=temp_pdf_path)
+                except Exception as pdf_ex:
+                    # Fallback para screenshot se não suportado (ex: modo headful)
+                    screenshot_path = f"resultado_federal_{cnpj_limpo}.png"
+                    page.screenshot(path=screenshot_path, full_page=True)
+                    img = Image.open(screenshot_path).convert("RGB")
+                    img.save(temp_pdf_path, "PDF")
+                    if os.path.exists(screenshot_path):
+                        os.remove(screenshot_path)
+                return {"status": "sucesso", "pdf_path": temp_pdf_path}
+            else:
+                return {"status": "erro", "mensagem": "Resultado desconhecido após clique de emissão."}
+                
+        except Exception as e:
+            return {"status": "erro", "mensagem": str(e)}
+        finally:
+            if 'page' in locals():
+                try:
+                    client = page.context.new_cdp_session(page)
+                    client.send("Browser.close")
+                except:
+                    pass
+                try: page.close()
+                except: pass
+            if 'context' in locals():
+                try: context.close()
+                except: pass
+            if 'browser' in locals():
+                try: browser.close()
+                except: pass
+
+
+def obter_cndt(cnpj, headless=True):
+    print(f"[CNDT] Iniciando emissão para o CNPJ: {cnpj}...")
+    url = "https://cndt-certidao.tst.jus.br/inicio.faces"
+    
+    cnpj_limpo = cnpj.replace(".", "").replace("/", "").replace("-", "")
+    temp_pdf_path = os.path.abspath(f"temp_cndt_{cnpj_limpo}.pdf")
+    user_data_dir = os.path.abspath("./user_data_cndt")
+    
+    ocr = ddddocr.DdddOcr(show_ad=False)
+    
+    with sync_playwright() as p:
+        browser, context = iniciar_e_conectar_chrome(p, user_data_dir, headless=headless)
+        page = context.new_page()
+        
+        try:
+            goto_with_retry(page, url)
+            btn_inicial = 'xpath=//*[@id="corpo"]/div/div[2]/input[1]'
+            page.wait_for_selector(btn_inicial, timeout=20000)
+            page.click(btn_inicial)
+            
+            cnpj_selector = 'xpath=//*[@id="gerarCertidaoForm:cpfCnpj"]'
+            page.wait_for_selector(cnpj_selector, timeout=20000)
+            page.fill(cnpj_selector, cnpj)
+            
+            captcha_img_sel = 'img[id*="captcha"], img[id*="Captcha"], img[src^="data:image"]'
+            captcha_input_sel = '[id="idCampoResposta"]'
+            btn_emitir = '[id="gerarCertidaoForm:btnEmitirCertidao"]'
+            erro_selector = ".mensagem-erro, .erro, .alert, #messages, ul.erro, [id='gerarCertidaoForm:mensagens'], #mensagens, .erros, [id*='areaMensagemErro']"
+            
+            max_tentativas = 10
+            for tentativa in range(1, max_tentativas + 1):
+                print(f"    [CNDT CAPTCHA] Tentativa {tentativa}/{max_tentativas}...")
+                
+                img_el = page.locator(captcha_img_sel).first
+                img_el.wait_for(state="attached", timeout=15000)
+                
+                img_bytes = None
+                src = img_el.get_attribute("src")
+                if src and src.startswith("data:image"):
+                    import base64
+                    try:
+                        header, base64_data = src.split(",", 1)
+                        img_bytes = base64.b64decode(base64_data)
+                        print("    [CNDT CAPTCHA] Imagem extraída diretamente via Base64 do atributo 'src'.")
+                    except Exception as b64_err:
+                        print(f"    [CNDT CAPTCHA] Erro ao decodificar Base64: {b64_err}")
+                
+                if not img_bytes:
+                    try:
+                        img_el.wait_for(state="visible", timeout=5000)
+                        img_bytes = img_el.screenshot()
+                    except Exception as s_err:
+                        print(f"    [CNDT CAPTCHA] Falha no screenshot do elemento: {s_err}. Capturando página inteira...")
+                        temp_cndt_snap = f"temp_cndt_captcha_snap_{cnpj_limpo}.png"
+                        page.screenshot(path=temp_cndt_snap)
+                        with open(temp_cndt_snap, "rb") as f:
+                            img_bytes = f.read()
+                        if os.path.exists(temp_cndt_snap):
+                            os.remove(temp_cndt_snap)
+                
+                captcha_val = ocr.classification(img_bytes)
+                captcha_val = "".join([c for c in captcha_val if c.isascii() and c.isalnum()])
+                print(f"    ddddocr leu: '{captcha_val}'")
+                
+                page.fill(captcha_input_sel, "")
+                page.fill(captcha_input_sel, captcha_val)
+                
+                try:
+                    with page.expect_download(timeout=10000) as download_info:
+                        page.click(btn_emitir)
+                    
+                    download = download_info.value
+                    download.save_as(temp_pdf_path)
+                    print(f"    PDF CNDT baixado com sucesso na tentativa {tentativa}.")
+                    return {"status": "sucesso", "pdf_path": temp_pdf_path}
+                    
+                except Exception as d_err:
+                    time.sleep(1.0)
+                    elementos_erro = page.query_selector_all(erro_selector)
+                    erro_msg = ""
+                    for el in elementos_erro:
+                        if el.is_visible():
+                            txt = el.inner_text().strip()
+                            if txt:
+                                erro_msg = txt
+                                break
+                    
+                    # Se houve erro ou download falhou, vamos reiniciar a tela se o botão "Emitir Nova Certidão" estiver presente
+                    btn_emitir_nova = 'input[value="Emitir Nova Certidão"]'
+                    try:
+                        if page.locator(btn_emitir_nova).count() > 0:
+                            print("    [CNDT CAPTCHA] Botão 'Emitir Nova Certidão' detectado. Reiniciando formulário...")
+                            page.click(btn_emitir_nova)
+                            page.wait_for_selector(cnpj_selector, timeout=15000)
+                            page.fill(cnpj_selector, cnpj)
+                    except Exception as btn_err:
+                        print(f"    Erro ao tentar voltar com 'Emitir Nova Certidão': {btn_err}")
+                    
+                    if erro_msg:
+                        print(f"    Mensagem do portal: '{erro_msg}'")
+                        if any(kwd in erro_msg.lower() for kwd in ["código", "segurança", "captcha", "inválido", "caracteres"]):
+                            continue
+                        else:
+                            return {"status": "erro", "mensagem": f"Erro no portal CNDT: {erro_msg}"}
+                    else:
+                        continue
+                        
+            return {"status": "erro", "mensagem": f"Falha ao resolver o CAPTCHA da CNDT após {max_tentativas} tentativas."}
+            
+        except Exception as e:
+            return {"status": "erro", "mensagem": str(e)}
+        finally:
+            if 'page' in locals():
+                try:
+                    client = page.context.new_cdp_session(page)
+                    client.send("Browser.close")
+                except:
+                    pass
+                try: page.close()
+                except: pass
+            if 'context' in locals():
+                try: context.close()
+                except: pass
+            if 'browser' in locals():
+                try: browser.close()
+                except: pass
+
+
+def obter_municipal_sp(cnpj, user_data_dir=None, headless=True):
+    print(f"[MUNICIPAL SP] Iniciando emissão para o CNPJ: {cnpj}...")
+    url = "https://duc.prefeitura.sp.gov.br/certidoes/forms_anonimo/frmConsultaEmissaoCertificado.aspx"
+    
+    if not user_data_dir:
+        user_data_dir = os.path.abspath("./user_data_municipal_sp")
+        
+    cnpj_limpo = cnpj.replace(".", "").replace("/", "").replace("-", "")
+    temp_pdf_path = os.path.abspath(f"temp_municipal_sp_{cnpj_limpo}.pdf")
+    
+    ocr = ddddocr.DdddOcr(show_ad=False)
+    
+    max_tentativas_globais = 3
+    for tentativa_global in range(1, max_tentativas_globais + 1):
+        print(f"    [MUNICIPAL SP] Tentativa global {tentativa_global}/{max_tentativas_globais}...")
+        
+        with sync_playwright() as p:
+            browser, context = iniciar_e_conectar_chrome(p, user_data_dir, headless=headless)
+            page = context.new_page()
+            
+            try:
+                # 1. Acesso inicial com retries de rede
+                goto_with_retry(page, url)
+                time.sleep(2)
+                
+                cookie_btn = page.locator('text="Sair sem autorizar"')
+                if cookie_btn.count() > 0:
+                    cookie_btn.click()
+                time.sleep(1)
+                
+                tratar_desafio_prodam_auto(page, ocr)
+                verificar_erro_rede(page)
+                
+                dropdown_xpath = 'xpath=//*[@id="ctl00_ConteudoPrincipal_ddlTipoCertidao"]'
+                page.wait_for_selector(dropdown_xpath, timeout=15000)
+                page.select_option(dropdown_xpath, label="Certidão Tributária Mobiliária")
+                time.sleep(2) # Aguarda postback
+                
+                tratar_desafio_prodam_auto(page, ocr)
+                verificar_erro_rede(page)
+                
+                cnpj_input_xpath = 'xpath=//*[@id="ctl00_ConteudoPrincipal_txtCNPJ"]'
+                page.wait_for_selector(cnpj_input_xpath, timeout=15000)
+                page.fill(cnpj_input_xpath, cnpj_limpo)
+                verificar_erro_rede(page)
+                
+                captcha_img_xpath = 'xpath=//*[@id="ctl00_ConteudoPrincipal_imgCaptcha"]'
+                captcha_input_xpath = 'xpath=//*[@id="ctl00_ConteudoPrincipal_txtValorCaptcha"]'
+                emitir_btn_xpath = 'xpath=//*[@id="ctl00_ConteudoPrincipal_btnEmitir"]'
+                erro_selector = "#ctl00_ConteudoPrincipal_lblMensagem, .alert, .erro, .mensagem-erro"
+                
+                max_tentativas = 10
+                captcha_resolvido = False
+                for tentativa in range(1, max_tentativas + 1):
+                    print(f"        [MUNICIPAL SP CAPTCHA] Tentativa {tentativa}/{max_tentativas}...")
+                    verificar_erro_rede(page)
+                    
+                    img_el = page.locator(captcha_img_xpath)
+                    img_el.wait_for(state="visible", timeout=10000)
+                    time.sleep(0.5)
+                    img_bytes = img_el.screenshot()
+                    
+                    captcha_val = ocr.classification(img_bytes)
+                    captcha_val = "".join([c for c in captcha_val if c.isascii() and c.isalnum()])
+                    print(f"        ddddocr leu: '{captcha_val}'")
+                    
+                    page.fill(captcha_input_xpath, "")
+                    page.fill(captcha_input_xpath, captcha_val)
+                    
+                    try:
+                        with page.expect_download(timeout=15000) as download_info:
+                            page.click(emitir_btn_xpath)
+                            
+                        download = download_info.value
+                        download.save_as(temp_pdf_path)
+                        print(f"        PDF Municipal SP baixado com sucesso na tentativa {tentativa}.")
+                        
+                        time.sleep(2)
+                        fechar_modal_xpath = 'xpath=//*[@id="btnFecharModalCertidoes"]'
+                        if page.locator(fechar_modal_xpath).is_visible():
+                            page.click(fechar_modal_xpath)
+                            
+                        captcha_resolvido = True
+                        break
+                        
+                    except Exception as d_err:
+                        time.sleep(1.0)
+                        tratar_desafio_prodam_auto(page, ocr)
+                        verificar_erro_rede(page)
+                        
+                        erro_msg = ""
+                        elementos_erro = page.query_selector_all(erro_selector)
+                        for el in elementos_erro:
+                            if el.is_visible():
+                                txt = el.inner_text().strip()
+                                if txt:
+                                    erro_msg = txt
+                                    break
+                                    
+                        if erro_msg:
+                            print(f"        Mensagem do portal: '{erro_msg}'")
+                            if any(kwd in erro_msg.lower() for kwd in ["captcha", "imagem", "código", "segurança", "inválido"]):
+                                continue
+                            else:
+                                return {"status": "erro", "mensagem": f"Erro no portal Municipal SP: {erro_msg}"}
+                        else:
+                            verificar_erro_rede(page)
+                            continue
+                            
+                if captcha_resolvido:
+                    return {"status": "sucesso", "pdf_path": temp_pdf_path}
+                else:
+                    raise Exception(f"Falha ao resolver o CAPTCHA Municipal SP após {max_tentativas} tentativas.")
+                    
+            except NetworkError as net_err:
+                print(f"    [MUNICIPAL SP] Erro de rede na tentativa global {tentativa_global}: {net_err}")
+                if tentativa_global == max_tentativas_globais:
+                    return {"status": "erro", "mensagem": f"Erro de rede persistente no portal Municipal SP: {net_err}"}
+                time.sleep(3)
+            except Exception as e:
+                print(f"    [MUNICIPAL SP] Erro geral na tentativa global {tentativa_global}: {e}")
+                if tentativa_global == max_tentativas_globais:
+                    return {"status": "erro", "mensagem": str(e)}
+                time.sleep(3)
+            finally:
+                if 'page' in locals():
+                    try:
+                        client = page.context.new_cdp_session(page)
+                        client.send("Browser.close")
+                    except:
+                        pass
+                    try: page.close()
+                    except: pass
+                if 'context' in locals():
+                    try: context.close()
+                    except: pass
+                if 'browser' in locals():
+                    try: browser.close()
+                    except: pass
+
+
+def obter_estadual(cnpj, headless=True):
+    print(f"[ESTADUAL] Iniciando emissão para o CNPJ: {cnpj}...")
+    url = "https://www10.fazenda.sp.gov.br/CertidaoNegativaDeb/Pages/EmissaoCertidaoNegativa.aspx"
+    
+    cnpj_limpo = cnpj.replace(".", "").replace("/", "").replace("-", "")
+    temp_pdf_path = os.path.abspath(f"temp_estadual_sp_{cnpj_limpo}.pdf")
+    user_data_dir = os.path.abspath("./user_data_sp")
+    
+    with sync_playwright() as p:
+        browser, context = iniciar_e_conectar_chrome(p, user_data_dir, headless=headless)
+        page = context.new_page()
+        
+        try:
+            goto_with_retry(page, url)
+            
+            cnpj_radio_xpath = 'xpath=//*[@id="MainContent_cnpjradio"]'
+            page.wait_for_selector(cnpj_radio_xpath, timeout=20000)
+            page.click(cnpj_radio_xpath)
+            
+            cnpj_input_xpath = 'xpath=//*[@id="MainContent_txtDocumento"]'
+            page.wait_for_selector(cnpj_input_xpath, timeout=10000)
+            page.fill(cnpj_input_xpath, cnpj_limpo)
+            
+            recaptcha_resolvido = resolver_recaptcha(page)
+            if not recaptcha_resolvido:
+                raise Exception("A resolução automática do reCAPTCHA falhou no modo headless.")
+            
+            btn_emitir_xpath = 'xpath=//*[@id="MainContent_btnPesquisar"]'
+            page.wait_for_selector(btn_emitir_xpath, timeout=10000)
+            page.click(btn_emitir_xpath)
+            
+            btn_imprimir_xpath = 'xpath=//*[@id="MainContent_btnImpressao"]'
+            page.wait_for_selector(btn_imprimir_xpath, timeout=20000)
+            
+            page.evaluate("window.print = () => { console.log('window.print simulado com sucesso'); }")
+            
+            pdf_salvo = False
+            
+            try:
+                with page.expect_download(timeout=5000) as download_info:
+                    page.click(btn_imprimir_xpath)
+                download = download_info.value
+                download.save_as(temp_pdf_path)
+                print(f"    [ESTADUAL-SP] PDF baixado com sucesso via download em: {temp_pdf_path}")
+                pdf_salvo = True
+            except Exception:
+                pass
+            
+            if not pdf_salvo:
+                page.emulate_media(media="print")
+                
+                page.evaluate("""
+                    document.querySelectorAll('input[type="submit"], input[type="button"], button, .no-print, [id*="btnImpressao"], [id*="btnVoltar"]').forEach(el => el.style.display = 'none');
+                """)
+                
+                try:
+                    page.click(btn_imprimir_xpath, timeout=2000)
+                except:
+                    pass
+                
+                screenshot_path = os.path.abspath(f"temp_screenshot_estadual_{cnpj_limpo}.png")
+                page.screenshot(path=screenshot_path, full_page=True)
+                
+                page.emulate_media(media="screen")
+                
+                try:
+                    from PIL import Image
+                    img = Image.open(screenshot_path).convert("RGB")
+                    img.save(temp_pdf_path, "PDF")
+                    print(f"    [ESTADUAL-SP] PDF real gerado via conversão de imagem em: {temp_pdf_path}")
+                    pdf_salvo = True
+                except Exception as pdf_err:
+                    raise Exception(f"Erro ao converter screenshot para PDF: {pdf_err}")
+                finally:
+                    if os.path.exists(screenshot_path):
+                        try: os.remove(screenshot_path)
+                        except: pass
+            
+            return {"status": "sucesso", "pdf_path": temp_pdf_path}
+            
+        except Exception as e:
+            return {"status": "erro", "mensagem": f"Falha no robô Estadual SP: {str(e)}"}
+        finally:
+            browser.close()
+
 
 if __name__ == "__main__":
     print("=" * 60)
