@@ -51,13 +51,17 @@ class NetworkError(Exception):
 
 def verificar_erro_rede(page):
     try:
+        url = page.url
+        if not url or url == "about:blank":
+            raise NetworkError("Página em branco ou desconectada.")
+            
         body_text = page.locator("body").inner_text().lower()
-        if "err_empty_response" in body_text or "não está funcionando" in body_text or "nenhum dado foi enviado" in body_text:
-            raise NetworkError("Erro de rede detectado (ERR_EMPTY_RESPONSE / Página não está funcionando).")
+        if "err_empty_response" in body_text or "não está funcionando" in body_text or "nenhum dado foi enviado" in body_text or "erro de conexão" in body_text:
+            raise NetworkError("Erro de rede detectado no corpo da página (ERR_EMPTY_RESPONSE / Página não está funcionando).")
     except NetworkError:
         raise
-    except Exception:
-        pass
+    except Exception as e:
+        raise NetworkError(f"Falha de comunicação com a página (Target closed/Network failure): {e}")
 
 
 def goto_with_retry(page, url, max_retries=3, timeout=30000):
@@ -1465,8 +1469,34 @@ def obter_municipal_sp(cnpj, user_data_dir=None, headless=True):
                     captcha_val = "".join([c for c in captcha_val if c.isascii() and c.isalnum()])
                     print(f"        ddddocr leu: '{captcha_val}'")
                     
+                    # Se o CAPTCHA lido não tiver 4 ou 5 caracteres, recarrega a página para evitar bloqueio do WAF
+                    if len(captcha_val) not in (4, 5):
+                        print(f"        [AVISO] CAPTCHA com comprimento inválido ({len(captcha_val)} caracteres). Recarregando a página...")
+                        page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                        time.sleep(1.0)
+                        
+                        # Re-seleciona a opção do dropdown para forçar o postback
+                        dropdown_xpath = 'xpath=//*[@id="ctl00_ConteudoPrincipal_ddlTipoCertidao"]'
+                        page.wait_for_selector(dropdown_xpath, timeout=15000)
+                        page.select_option(dropdown_xpath, label="Certidão Tributária Mobiliária")
+                        time.sleep(2.0) # Aguarda postback
+                        
+                        # Trata o desafio Prodam se aparecer pós-postback
+                        tratar_desafio_prodam_auto(page, ocr)
+                        
+                        # Preenche o CNPJ novamente
+                        cnpj_input_xpath = 'xpath=//*[@id="ctl00_ConteudoPrincipal_txtCNPJ"]'
+                        page.wait_for_selector(cnpj_input_xpath, timeout=15000)
+                        page.fill(cnpj_input_xpath, cnpj_limpo)
+                        continue
+                    
                     page.fill(captcha_input_xpath, "")
-                    page.fill(captcha_input_xpath, captcha_val)
+                    time.sleep(0.5)
+                    page.type(captcha_input_xpath, captcha_val, delay=100)
+                    time.sleep(2.0) # Simula o usuário revisando e movendo o mouse
+                    
+                    page.hover(emitir_btn_xpath)
+                    time.sleep(0.5)
                     
                     try:
                         with page.expect_download(timeout=15000) as download_info:
@@ -1476,7 +1506,7 @@ def obter_municipal_sp(cnpj, user_data_dir=None, headless=True):
                         download.save_as(temp_pdf_path)
                         print(f"        PDF Municipal SP baixado com sucesso na tentativa {tentativa}.")
                         
-                        time.sleep(2)
+                        time.sleep(2.0)
                         fechar_modal_xpath = 'xpath=//*[@id="btnFecharModalCertidoes"]'
                         if page.locator(fechar_modal_xpath).is_visible():
                             page.click(fechar_modal_xpath)
@@ -1485,6 +1515,12 @@ def obter_municipal_sp(cnpj, user_data_dir=None, headless=True):
                         break
                         
                     except Exception as d_err:
+                        err_msg_lower = str(d_err).lower()
+                        # Se houver erro de rede / bloqueio WAF pós-clique, propaga NetworkError para tentar novamente globalmente
+                        if any(k in err_msg_lower for k in ["empty_response", "connection_reset", "target closed", "context was destroyed", "navigation failed"]):
+                            print(f"        [AVISO] Conexão interrompida pelo WAF/rede pós-submissão: {d_err}")
+                            raise NetworkError(f"Conexão interrompida pelo WAF/rede pós-submissão: {d_err}")
+                            
                         time.sleep(1.0)
                         tratar_desafio_prodam_auto(page, ocr)
                         verificar_erro_rede(page)
@@ -1517,7 +1553,7 @@ def obter_municipal_sp(cnpj, user_data_dir=None, headless=True):
                 print(f"    [MUNICIPAL SP] Erro de rede na tentativa global {tentativa_global}: {net_err}")
                 if tentativa_global == max_tentativas_globais:
                     return {"status": "erro", "mensagem": f"Erro de rede persistente no portal Municipal SP: {net_err}"}
-                time.sleep(20) # Aguarda 20s para o WAF liberar o IP
+                time.sleep(300) # Aguarda 300s (5 min) para o WAF liberar o IP
             except Exception as e:
                 print(f"    [MUNICIPAL SP] Erro geral na tentativa global {tentativa_global}: {e}")
                 if tentativa_global == max_tentativas_globais:
