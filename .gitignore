@@ -2,6 +2,8 @@
 .env
 config.json
 frontend/config.json
+public/
+frontend/public/
 __pycache__/
 *.pyc
 
