@@ -1,0 +1,23 @@
+# Ignorar pastas de desenvolvimento e backend Python no deploy da Vercel
+venv/
+.env
+database/
+scratch/
+__pycache__/
+*.pyc
+*.py
+
+# Ignorar relatórios, prints e PDFs locais
+*.png
+*.pdf
+*.docx
+*.log
+user_data_*/
+
+# Ignorar arquivos de configuração locais
+.gitignore
+.agents/
+task.md
+walkthrough.md
+implementation_plan.md
+Requirements.txt
