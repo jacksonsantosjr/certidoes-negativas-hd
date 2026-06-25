@@ -47,11 +47,28 @@ const dom = {
 // ==========================================
 
 async function inicializarSupabase() {
-    // 1. Tentar carregar do LocalStorage
-    let url = localStorage.getItem('SUPABASE_URL');
-    let key = localStorage.getItem('SUPABASE_KEY');
+    let url = null;
+    let key = null;
     
-    // 2. Se não houver, tentar buscar o arquivo .env no workspace
+    // 1. Tentar carregar do config.json local (gerado dinamicamente no deploy da Vercel)
+    try {
+        const configRes = await fetch('config.json');
+        if (configRes.ok) {
+            const config = await configRes.json();
+            url = config.SUPABASE_URL;
+            key = config.SUPABASE_KEY;
+        }
+    } catch (e) {
+        console.log('config.json não disponível.');
+    }
+    
+    // 2. Se não houver config.json, tentar carregar do LocalStorage
+    if (!url || !key) {
+        url = localStorage.getItem('SUPABASE_URL');
+        key = localStorage.getItem('SUPABASE_KEY');
+    }
+    
+    // 3. Se não houver, tentar buscar o arquivo .env no workspace (desenvolvimento local)
     if (!url || !key) {
         try {
             const response = await fetch('../.env');
@@ -62,8 +79,6 @@ async function inicializarSupabase() {
                 key = env.SUPABASE_KEY;
                 
                 if (url && key) {
-                    localStorage.setItem('SUPABASE_URL', url);
-                    localStorage.setItem('SUPABASE_KEY', key);
                     showToast('Configurações carregadas do arquivo .env com sucesso!', 'success');
                 }
             }
@@ -72,11 +87,15 @@ async function inicializarSupabase() {
         }
     }
 
-    // 3. Se ainda assim não houver chaves, solicitar ao usuário
+    // 4. Se ainda assim não houver chaves, solicitar ao usuário
     if (!url || !key) {
         solicitarCredenciais();
         return false;
     }
+
+    // Salva/atualiza no LocalStorage para cache local
+    localStorage.setItem('SUPABASE_URL', url);
+    localStorage.setItem('SUPABASE_KEY', key);
 
     try {
         supabaseClient = supabase.createClient(url, key);
