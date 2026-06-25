@@ -650,8 +650,12 @@ function configurarNavegacao() {
 
 function configurarTema() {
     // Carregar tema preferido
-    const theme = localStorage.getItem('theme') || 'dark';
-    if (theme === 'light') {
+    const theme = localStorage.getItem('theme') || 'light';
+    if (theme === 'dark') {
+        document.body.classList.remove('light-mode');
+        document.body.classList.add('dark-mode');
+        dom.themeToggleBtn.innerHTML = '<i class="fa-solid fa-sun"></i> <span>Modo Claro</span>';
+    } else {
         document.body.classList.remove('dark-mode');
         document.body.classList.add('light-mode');
         dom.themeToggleBtn.innerHTML = '<i class="fa-solid fa-moon"></i> <span>Modo Escuro</span>';
