@@ -9,6 +9,7 @@ __pycache__/
 
 # Ignorar relatórios, prints e PDFs locais
 *.png
+!frontend/logo.png
 *.pdf
 *.docx
 *.log
