@@ -86,7 +86,8 @@ def iniciar_e_conectar_chrome(p, user_data_dir, headless=False):
     # Garante o encerramento de processos travados
     limpar_chrome_rpa()
     
-    user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    # Versão do User-Agent correspondendo exatamente ao motor local do Playwright
+    user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.7778.96 Safari/537.36"
     
     context = p.chromium.launch_persistent_context(
         user_data_dir,
@@ -95,7 +96,9 @@ def iniciar_e_conectar_chrome(p, user_data_dir, headless=False):
         viewport={"width": 1280, "height": 800},
         locale="pt-BR",
         timezone_id="America/Sao_Paulo",
-        accept_downloads=True
+        accept_downloads=True,
+        args=["--disable-blink-features=AutomationControlled"],
+        ignore_default_args=["--enable-automation"]
     )
     
     # Injeta propriedades stealth para evitar detecção automatizada
@@ -815,34 +818,47 @@ def testar_municipal_sp(cnpj):
     url = "https://duc.prefeitura.sp.gov.br/certidoes/forms_anonimo/frmConsultaEmissaoCertificado.aspx"
     print(f"Acessando: {url}")
     
-    user_data_dir = os.path.abspath("./user_data_municipal_sp")
-    
     with sync_playwright() as p:
-        browser, context = iniciar_e_conectar_chrome(p, user_data_dir, headless=False)
+        print("Iniciando Chromium em modo Headless (Invisível) para contornar o bloqueio WAF...")
+        browser = p.chromium.launch(
+            headless=True,
+            args=["--disable-blink-features=AutomationControlled"],
+            ignore_default_args=["--enable-automation"]
+        )
+        context = browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.7778.96 Safari/537.36",
+            viewport={"width": 1280, "height": 800},
+            locale="pt-BR",
+            timezone_id="America/Sao_Paulo",
+            accept_downloads=True
+        )
+        context.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', { get: () => false });
+            Object.defineProperty(navigator, 'languages', { get: () => ['pt-BR', 'pt', 'en-US', 'en'] });
+            Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+            window.chrome = { runtime: {} };
+        """)
         page = context.new_page()
         
         try:
-            page.goto(url)
-            time.sleep(3)
+            page.goto(url, wait_until="domcontentloaded", timeout=30000)
             
-            # Dismiss cookies modal
-            cookie_btn = page.locator('text="Sair sem autorizar"')
-            if cookie_btn.count() > 0:
-                cookie_btn.click()
-                print("Modal de cookies fechado.")
-            time.sleep(1)
-            
-            # Trata desafio prodam se aparecer inicialmente
-            tratar_desafio_prodam(page)
+            # Dismiss cookies modal by authorizing all cookies
+            try:
+                cookie_btn = page.locator('.cc__button__autorizacao--all')
+                if cookie_btn.count() > 0:
+                    cookie_btn.click()
+                    print("Modal de cookies aceito com sucesso.")
+                    time.sleep(0.5)
+            except:
+                pass
             
             # Select "Certidão Tributária Mobiliária"
             dropdown_xpath = 'xpath=//*[@id="ctl00_ConteudoPrincipal_ddlTipoCertidao"]'
             page.wait_for_selector(dropdown_xpath, timeout=15000)
             page.select_option(dropdown_xpath, label="Certidão Tributária Mobiliária")
             print("Opção 'Certidão Tributária Mobiliária' selecionada.")
-            
-            # Trata desafio prodam se aparecer após a seleção (postback)
-            tratar_desafio_prodam(page)
+            time.sleep(2) # Aguarda postback
             
             # Aguarda o campo de CNPJ ficar visível
             cnpj_input_xpath = 'xpath=//*[@id="ctl00_ConteudoPrincipal_txtCNPJ"]'
@@ -858,11 +874,20 @@ def testar_municipal_sp(cnpj):
             page.wait_for_selector(captcha_img_xpath, timeout=10000)
             
             captcha_img_path = "captcha_municipal_sp.png"
-            page.locator(captcha_img_xpath).screenshot(path=captcha_img_path)
+            img_bytes = page.locator(captcha_img_xpath).screenshot(path=captcha_img_path)
             print(f"Imagem do CAPTCHA Municipal SP salva como '{captcha_img_path}'.")
             
-            # Pede para o usuário digitar o CAPTCHA
-            captcha_val = obter_input_interativo("Digite o CAPTCHA de 4 ou 5 caracteres no terminal e pressione ENTER: ", page)
+            # Decodifica automaticamente com ddddocr para facilitar
+            ocr = ddddocr.DdddOcr(show_ad=False)
+            captcha_auto = ocr.classification(img_bytes)
+            captcha_auto = "".join([c for c in captcha_auto if c.isascii() and c.isalnum()])
+            print(f"\n[Interativo] ddddocr decodificou o CAPTCHA como: '{captcha_auto}'")
+            print("Abra a imagem 'captcha_municipal_sp.png' na pasta do projeto caso queira conferir visualmente.")
+            
+            prompt = f"Pressione ENTER para usar '{captcha_auto}' ou digite o CAPTCHA correto: "
+            captcha_val = obter_input_interativo(prompt, page)
+            if not captcha_val.strip():
+                captcha_val = captcha_auto
             
             captcha_input_xpath = 'xpath=//*[@id="ctl00_ConteudoPrincipal_txtValorCaptcha"]'
             page.fill(captcha_input_xpath, captcha_val)
@@ -1372,27 +1397,46 @@ def obter_municipal_sp(cnpj, user_data_dir=None, headless=True):
         print(f"    [MUNICIPAL SP] Tentativa global {tentativa_global}/{max_tentativas_globais}...")
         
         with sync_playwright() as p:
-            browser, context = iniciar_e_conectar_chrome(p, user_data_dir, headless=headless)
+            # Para o Municipal SP, usamos Chromium Headless limpo (sem perfil persistente)
+            # a fim de evitar o bloqueio WAF da prefeitura (ERR_EMPTY_RESPONSE no postback).
+            browser = p.chromium.launch(
+                headless=True,
+                args=["--disable-blink-features=AutomationControlled"],
+                ignore_default_args=["--enable-automation"]
+            )
+            context = browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.7778.96 Safari/537.36",
+                viewport={"width": 1280, "height": 800},
+                locale="pt-BR",
+                timezone_id="America/Sao_Paulo",
+                accept_downloads=True
+            )
+            context.add_init_script("""
+                Object.defineProperty(navigator, 'webdriver', { get: () => false });
+                Object.defineProperty(navigator, 'languages', { get: () => ['pt-BR', 'pt', 'en-US', 'en'] });
+                Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+                window.chrome = { runtime: {} };
+            """)
             page = context.new_page()
             
             try:
-                # 1. Acesso inicial com retries de rede
-                goto_with_retry(page, url)
-                time.sleep(2)
+                # Acesso rápido para evitar telemetria de WAF
+                page.goto(url, wait_until="domcontentloaded", timeout=30000)
                 
-                cookie_btn = page.locator('text="Sair sem autorizar"')
-                if cookie_btn.count() > 0:
-                    cookie_btn.click()
-                time.sleep(1)
-                
-                tratar_desafio_prodam_auto(page, ocr)
-                verificar_erro_rede(page)
+                try:
+                    cookie_btn = page.locator('.cc__button__autorizacao--all')
+                    if cookie_btn.count() > 0:
+                        cookie_btn.click()
+                        time.sleep(0.5)
+                except:
+                    pass
                 
                 dropdown_xpath = 'xpath=//*[@id="ctl00_ConteudoPrincipal_ddlTipoCertidao"]'
                 page.wait_for_selector(dropdown_xpath, timeout=15000)
                 page.select_option(dropdown_xpath, label="Certidão Tributária Mobiliária")
                 time.sleep(2) # Aguarda postback
                 
+                # Trata desafio prodam se aparecer após a seleção (postback)
                 tratar_desafio_prodam_auto(page, ocr)
                 verificar_erro_rede(page)
                 
@@ -1473,12 +1517,12 @@ def obter_municipal_sp(cnpj, user_data_dir=None, headless=True):
                 print(f"    [MUNICIPAL SP] Erro de rede na tentativa global {tentativa_global}: {net_err}")
                 if tentativa_global == max_tentativas_globais:
                     return {"status": "erro", "mensagem": f"Erro de rede persistente no portal Municipal SP: {net_err}"}
-                time.sleep(3)
+                time.sleep(20) # Aguarda 20s para o WAF liberar o IP
             except Exception as e:
                 print(f"    [MUNICIPAL SP] Erro geral na tentativa global {tentativa_global}: {e}")
                 if tentativa_global == max_tentativas_globais:
                     return {"status": "erro", "mensagem": str(e)}
-                time.sleep(3)
+                time.sleep(10) # Aguarda 10s para estabilização
             finally:
                 if 'page' in locals():
                     try:
