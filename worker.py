@@ -1,13 +1,14 @@
-import os
 import sys
-import time
-import datetime
-import ssl
-from dotenv import load_dotenv
-from supabase import create_client, Client
+print("="*80)
+print(" ERRO: ESTE WORKER ESTÁ DESATUALIZADO E FOI SUBSTITUÍDO!")
+print(" Por favor, feche este terminal/processo e rode o novo worker que")
+print(" foi refatorado e está localizado em: worker/main.py")
+print(" Comando: python worker/main.py")
+print("="*80)
+sys.exit(1)
 
-# Importa as funções de scraping do test_scrapers.py
-import test_scrapers
+import os
+import time
 
 # Configurações globais para ignorar verificações de SSL se necessário (ambiente corporativo)
 try:

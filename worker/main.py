@@ -354,16 +354,32 @@ def emitir_cnd_estadual_sp(cnpj):
                 except: pass
 
 def emitir_cnd_estadual_via_api(cnpj, uf):
-    logger.info(f"[ESTADUAL] Solicitando emissão via API de mercado para UF {uf} - CNPJ {cnpj}")
-    temp_pdf_path = f"temp_estadual_{cnpj}.pdf"
+    logger.warning(f"[ESTADUAL] Lógica específica para a UF {uf} (CNPJ {cnpj}) ainda não implementada.")
+    raise Exception(f"Integração Estadual para a UF {uf} ainda não desenvolvida. Aguardando implementação específica.")
+
+import json
+FALLBACK_JSON_PATH = os.path.join(os.path.dirname(__file__), "fallback_federal.json")
+
+def read_fallback_cnpjs():
     try:
-        time.sleep(2)
-        with open(temp_pdf_path, "wb") as f:
-            f.write(f"MOCK PDF CONTENT - CERTIDAO ESTADUAL {uf} CNPJ {cnpj}".encode('utf-8'))
-        data_vencimento = (datetime.now() + timedelta(days=90)).strftime("%Y-%m-%d")
-        return temp_pdf_path, data_vencimento
-    except Exception as e:
-        raise Exception(f"Falha na API Estadual: {str(e)}")
+        with open(FALLBACK_JSON_PATH, "r") as f:
+            return set(json.load(f))
+    except:
+        return set()
+
+def add_fallback_cnpj(cnpj):
+    cnpjs = read_fallback_cnpjs()
+    cnpjs.add(cnpj)
+    with open(FALLBACK_JSON_PATH, "w") as f:
+        json.dump(list(cnpjs), f)
+
+def remove_fallback_cnpj(cnpj):
+    cnpjs = read_fallback_cnpjs()
+    if cnpj in cnpjs:
+        cnpjs.remove(cnpj)
+        with open(FALLBACK_JSON_PATH, "w") as f:
+            json.dump(list(cnpjs), f)
+
 
 def emitir_cnd_federal(cnpj):
     """
@@ -443,30 +459,49 @@ def emitir_cnd_federal(cnpj):
                 # O usuário informou o xpath exato do botão "Emitir Nova Certidão"
                 btn_xpath = 'xpath=/html/body/modal-container/div[2]/div/div[3]/button[2]'
                 btn_texto = 'button:has-text("Emitir Nova Certidão")'
-                
+                btn_consultar_modal = 'xpath=/html/body/modal-container/div[2]/div/div[3]/button[1]'
+                btn_texto_consultar = 'button:has-text("Consultar Certidão")'
+
                 # Aguardamos pelo modal ou botão (espera um dos dois)
                 try:
                     page.wait_for_selector('modal-container', timeout=15000)
                 except:
                     page.wait_for_selector(btn_xpath, timeout=5000)
-                    
+
                 time.sleep(1.0)
-                
-                if page.locator(btn_xpath).is_visible():
-                    page.hover(btn_xpath)
-                    time.sleep(0.5)
-                    page.click(btn_xpath)
-                    logger.info(f"Modal tratado clicando no xpath: {btn_xpath}")
-                elif page.locator(btn_texto).is_visible():
-                    page.hover(btn_texto)
-                    time.sleep(0.5)
-                    page.click(btn_texto)
-                    logger.info(f"Modal tratado clicando no texto: {btn_texto}")
+
+                # Verifica se o CNPJ está na lista de fallback (erro 023 anterior)
+                usar_fallback_consulta = (cnpj_limpo in read_fallback_cnpjs())
+
+                if usar_fallback_consulta:
+                    logger.info(f"[FEDERAL] Fallback ativado para {cnpj}! Clicando em Consultar Certidão no modal...")
+                    if page.locator(btn_consultar_modal).is_visible():
+                        page.hover(btn_consultar_modal)
+                        time.sleep(0.5)
+                        page.click(btn_consultar_modal)
+                    else:
+                        page.hover(btn_texto_consultar)
+                        time.sleep(0.5)
+                        page.click(btn_texto_consultar)
+                    # Remove do fallback pois já consumimos
+                    remove_fallback_cnpj(cnpj_limpo)
+                    logger.info("Modal tratado com Consultar Certidão (Fallback).")
                 else:
-                    # Fallback final tentando forçar clique se existir no DOM
-                    page.click(btn_xpath, force=True, timeout=5000)
-                    logger.info("Modal tratado com clique forçado no xpath.")
-                
+                    if page.locator(btn_xpath).is_visible():
+                        page.hover(btn_xpath)
+                        time.sleep(0.5)
+                        page.click(btn_xpath)
+                        logger.info(f"Modal tratado clicando no xpath: {btn_xpath}")
+                    elif page.locator(btn_texto).is_visible():
+                        page.hover(btn_texto)
+                        time.sleep(0.5)
+                        page.click(btn_texto)
+                        logger.info(f"Modal tratado clicando no texto: {btn_texto}")
+                    else:
+                        # Fallback final tentando forçar clique se existir no DOM
+                        page.click(btn_xpath, force=True, timeout=5000)
+                        logger.info("Modal tratado com clique forçado no xpath.")
+
                 time.sleep(1.0)
             except Exception as e:
                 logger.info(f"Modal de certidão válida não apareceu ou erro ao clicar: {e}")
@@ -615,57 +650,11 @@ def emitir_cnd_federal(cnpj):
                 
                 else:
                     # ===== CENÁRIO B: Erro 023 "Não foi possível concluir" no formulário =====
-                    # O CNPJ já está preenchido e os botões "Consultar Certidão" e "Emitir Certidão" estão visíveis
-                    logger.info("[FEDERAL] Erro 023 do portal detectado (rate-limit). Aguardando 10s antes de consultar...")
-                    time.sleep(10.0)
-                    
-                    # Fecha o alerta/banner de erro se existir
-                    try:
-                        close_btn = page.locator('button[aria-label="close"], .close, button:has-text("×")')
-                        if close_btn.is_visible():
-                            close_btn.first.click()
-                            time.sleep(1.0)
-                    except:
-                        pass
-                    
-                    # Tenta clicar em "Consultar Certidão" diretamente
-                    btn_consultar_direto = 'button:has-text("Consultar Certidão")'
-                    for tentativa in range(1, 4):  # Até 3 tentativas
-                        if page.locator(btn_consultar_direto).is_visible():
-                            page.click(btn_consultar_direto)
-                            logger.info(f"[FEDERAL] Tentativa {tentativa}: Clicou em Consultar Certidão.")
-                            time.sleep(3.0)
-                            
-                            # Verifica se o erro 023 desapareceu
-                            body_after = page.locator("body").inner_text()
-                            if "Não foi possível concluir" not in body_after:
-                                logger.info("[FEDERAL] Erro 023 resolvido! Prosseguindo com consulta...")
-                                break
-                            else:
-                                if tentativa < 3:
-                                    wait_time = 15 * tentativa
-                                    logger.info(f"[FEDERAL] Erro 023 persiste. Aguardando {wait_time}s antes da próxima tentativa...")
-                                    time.sleep(wait_time)
-                                else:
-                                    raise Exception("Portal da Receita Federal temporariamente indisponível (erro 023). Tente novamente em alguns minutos.")
-                        else:
-                            raise Exception("Botão Consultar Certidão não encontrado no formulário.")
-                    
-                    # Clica no botão do formulário intermediário se existir
-                    btn_consultar_form = 'xpath=/html/body/app-root/mf-portal-layout/portal-main-layout/div/main/ng-component/ng-component/ng-component/app-informar-parametro-pj/app-informar-parametro/form/div[2]/button'
-                    try:
-                        page.wait_for_selector(btn_consultar_form, timeout=8000)
-                        page.click(btn_consultar_form)
-                        logger.info("[FEDERAL] Clicou no botão Consultar do formulário de consulta.")
-                        time.sleep(2.0)
-                    except:
-                        try:
-                            btn_text_form = 'form button:has-text("Consultar Certidão")'
-                            if page.locator(btn_text_form).is_visible():
-                                page.click(btn_text_form)
-                                time.sleep(2.0)
-                        except:
-                            pass
+                    # Como o erro 023 bloqueia o IP temporariamente, tentaremos forçar a consulta na próxima execução
+                    logger.warning(f"[FEDERAL] Erro 023 do portal detectado (rate-limit) para o CNPJ {cnpj}.")
+                    add_fallback_cnpj(cnpj_limpo)
+                    logger.info("[FEDERAL] CNPJ adicionado ao fallback. O worker clicará em 'Consultar Certidão' na próxima tentativa.")
+                    raise Exception("Rate limit (023) atingido após tentativa de emissão. CNPJ configurado para consulta de segunda via na próxima tentativa (fallback).")
                 
                 # ===== PARTE COMUM: Tabela de resultados =====
                 try:
@@ -927,20 +916,8 @@ def emitir_cnd_municipal_via_api(cnpj, municipio, uf):
     """
     Rota B: Integração com API de mercado para obter a certidão municipal.
     """
-    logger.info(f"[MUNICIPAL] Solicitando emissão via API de mercado para {municipio}/{uf} - CNPJ {cnpj}")
-    temp_pdf_path = f"temp_municipal_{cnpj}.pdf"
-    
-    try:
-        time.sleep(2)
-        
-        with open(temp_pdf_path, "wb") as f:
-            f.write(f"MOCK PDF CONTENT - CERTIDAO MUNICIPAL {municipio}-{uf} CNPJ {cnpj}".encode('utf-8'))
-            
-        data_vencimento = (datetime.now() + timedelta(days=90)).strftime("%Y-%m-%d")
-        return temp_pdf_path, data_vencimento
-        
-    except Exception as e:
-        raise Exception(f"Falha na API Municipal: {str(e)}")
+    logger.warning(f"[MUNICIPAL] Lógica específica para o município {municipio}/{uf} (CNPJ {cnpj}) ainda não implementada.")
+    raise Exception(f"Integração Municipal para {municipio}/{uf} ainda não desenvolvida. Aguardando implementação específica.")
 
 
 # ==========================================
@@ -1068,6 +1045,10 @@ def rodar_worker():
                     except Exception as e:
                         logger.warning(f"Não foi possível deletar o arquivo temporário {pdf_local}: {str(e)}")
             
+            # Intervalo de segurança entre execuções de empresas (evita bloqueios/rate-limit como o erro 023)
+            logger.info("Aguardando intervalo de segurança de 45 segundos antes de buscar a próxima empresa...")
+            time.sleep(45)
+
         except Exception as loop_err:
             logger.error(f"Erro crítico no loop de polling: {str(loop_err)}")
             time.sleep(15)
