@@ -1232,18 +1232,132 @@ def obter_federal(cnpj, user_data_dir=None, headless=True):
                 if "insuficientes" not in body_text and "Não foi possível concluir" not in body_text:
                     raise Exception("Timeout aguardando resultado do portal Federal.")
             
+            body_text = page.locator("body").inner_text()
+            if "insuficientes" in body_text or "Não foi possível concluir" in body_text:
+                print("[FEDERAL] Impedimento para nova emissão detectado. Tentando obter última certidão válida (segunda via)...")
+                
+                # 1. Limpa cookies e storage para que o portal trate o próximo envio como nova sessão e mostre o modal
+                try:
+                    context.clear_cookies()
+                    page.evaluate("window.localStorage.clear(); window.sessionStorage.clear();")
+                    print("[FEDERAL] Cookies e storage da sessão limpos para reset do portal.")
+                except Exception as clear_err:
+                    print(f"[FEDERAL] Erro ao limpar cookies/storage: {clear_err}")
+                
+                # 2. Recarrega a página home limpa
+                try:
+                    page.reload()
+                    page.wait_for_selector(cnpj_selector, timeout=15000)
+                except Exception as reload_err:
+                    print(f"[FEDERAL] Erro ao recarregar página: {reload_err}. Tentando page.goto...")
+                    try:
+                        page.goto(url)
+                        page.wait_for_selector(cnpj_selector, timeout=15000)
+                    except:
+                        pass
+                
+                time.sleep(1.5)
+                page.focus(cnpj_selector)
+                page.click(cnpj_selector)
+                page.type(cnpj_selector, cnpj_limpo, delay=60)
+                page.press(cnpj_selector, "Tab")
+                time.sleep(1.0)
+                
+                # 3. Clica em Emitir para disparar o modal de certidão válida existente
+                page.click(btn_selector)
+                
+                # 4. No modal, clica em "Consultar Certidão" (primeiro botão)
+                btn_consultar_modal = 'xpath=/html/body/modal-container/div[2]/div/div[3]/button[1]'
+                try:
+                    page.wait_for_selector('modal-container', timeout=15000)
+                except:
+                    try:
+                        page.wait_for_selector(btn_consultar_modal, timeout=5000)
+                    except:
+                        pass
+                
+                time.sleep(1.0)
+                if page.locator(btn_consultar_modal).is_visible():
+                    page.click(btn_consultar_modal)
+                    print("[FEDERAL] Clicou em Consultar Certidão no modal.")
+                else:
+                    btn_text_sel = 'button:has-text("Consultar Certidão")'
+                    if page.locator(btn_text_sel).is_visible():
+                        page.click(btn_text_sel)
+                        print("[FEDERAL] Clicou em Consultar Certidão no modal via texto.")
+                    else:
+                        try:
+                            page.locator("modal-container .modal-footer button").first.click()
+                            print("[FEDERAL] Clicou no primeiro botão do modal-footer.")
+                        except Exception as modal_click_err:
+                            print(f"[FEDERAL] Falha ao tentar clicar no modal: {modal_click_err}")
+                time.sleep(2.0)
+                
+                # 5. Clica no botão de consultar no formulário de consulta
+                btn_consultar_form = 'xpath=/html/body/app-root/mf-portal-layout/portal-main-layout/div/main/ng-component/ng-component/ng-component/app-informar-parametro-pj/app-informar-parametro/form/div[2]/button'
+                try:
+                    page.wait_for_selector(btn_consultar_form, timeout=15000)
+                    page.click(btn_consultar_form)
+                except Exception as form_err:
+                    print(f"[FEDERAL] Botão de consulta do formulário não encontrado por xpath: {form_err}. Tentando por texto...")
+                    btn_text_form = 'form button:has-text("Consultar Certidão")'
+                    if not page.locator(btn_text_form).is_visible():
+                        btn_text_form = 'button:has-text("Consultar Certidão")'
+                    page.click(btn_text_form)
+                time.sleep(2.0)
+                
+                # 4. Na tabela de resultados, localiza a linha da certidão válida com maior data de vencimento
+                page.wait_for_selector("datatable-body-row", timeout=15000)
+                
+                import re
+                from datetime import datetime
+                
+                valid_rows = []
+                rows = page.locator("datatable-body-row").all()
+                for idx, row in enumerate(rows):
+                    cells_text = [c.inner_text().strip() for c in row.locator("datatable-body-cell").all()]
+                    # Verifica se a certidão está válida no portal
+                    if any("Válida" in t for t in cells_text):
+                        validity_date = None
+                        for t in cells_text:
+                            m = re.search(r"(\d{2})/(\d{2})/(\d{4})", t)
+                            if m:
+                                try:
+                                    validity_date = datetime.strptime(m.group(0), "%d/%m/%Y").date()
+                                except:
+                                    pass
+                        if validity_date:
+                            valid_rows.append((validity_date, row))
+                
+                if not valid_rows:
+                    return {"status": "erro", "mensagem": "As informações são insuficientes e nenhuma certidão válida anterior foi localizada no portal."}
+                
+                # Ordena pela data de validade descendente (maior primeiro)
+                valid_rows.sort(key=lambda x: x[0], reverse=True)
+                best_date, best_row = valid_rows[0]
+                
+                # Cancela se a certidão com maior validade já estiver expirada
+                if best_date < datetime.today().date():
+                    return {"status": "erro", "mensagem": f"A certidão válida mais recente expirou em {best_date.strftime('%d/%m/%Y')}."}
+                
+                print(f"[FEDERAL] Baixando segunda via da certidão com validade até: {best_date.strftime('%d/%m/%Y')}")
+                
+                # Clicar no botão de download (seta) na linha correspondente
+                btn_download = best_row.locator("button i, button")
+                
+                # Espera o download iniciar ao clicar
+                with page.expect_download(timeout=15000) as download_info:
+                    btn_download.first.click()
+                download = download_info.value
+                download.save_as(temp_pdf_path)
+                return {"status": "sucesso", "pdf_path": temp_pdf_path}
+            
             elementos_erro = page.query_selector_all(erro_selector)
             for el in elementos_erro:
                 if el.is_visible():
                     erro_msg = el.inner_text().strip()
                     if erro_msg:
                         return {"status": "erro", "mensagem": f"Erro no portal da Receita Federal: {erro_msg}"}
-            
-            body_text = page.locator("body").inner_text()
-            if "insuficientes" in body_text:
-                return {"status": "erro", "mensagem": "As informações disponíveis na Receita Federal sobre o contribuinte são insuficientes para emitir a certidão pela Internet."}
-            if "Não foi possível concluir" in body_text:
-                return {"status": "erro", "mensagem": "Não foi possível concluir a ação para o contribuinte informado. Tente novamente em alguns minutos."}
                 
             if page.query_selector(sucesso_selector):
                 print("PDF renderizado em tela. Gerando PDF...")
@@ -1262,6 +1376,11 @@ def obter_federal(cnpj, user_data_dir=None, headless=True):
                 return {"status": "erro", "mensagem": "Resultado desconhecido após clique de emissão."}
                 
         except Exception as e:
+            try:
+                page.screenshot(path="debug_federal_error.png")
+                print("[FEDERAL DEBUG] Screenshot de erro salvo em debug_federal_error.png")
+            except:
+                pass
             return {"status": "erro", "mensagem": str(e)}
         finally:
             if 'page' in locals():
