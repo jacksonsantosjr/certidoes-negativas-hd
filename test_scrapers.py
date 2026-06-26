@@ -1678,6 +1678,9 @@ def obter_municipal_sp(cnpj, user_data_dir=None, headless=True):
                 # Acesso rápido para evitar telemetria de WAF
                 page.goto(url, wait_until="domcontentloaded", timeout=30000)
                 
+                # Trata o desafio WAF da Prodam (pode aparecer logo na abertura da página)
+                tratar_desafio_prodam_auto(page, ocr)
+                
                 try:
                     cookie_btn = page.locator('.cc__button__autorizacao--all')
                     if cookie_btn.count() > 0:
@@ -1724,6 +1727,7 @@ def obter_municipal_sp(cnpj, user_data_dir=None, headless=True):
                     if len(captcha_val) not in (4, 5):
                         print(f"        [AVISO] CAPTCHA com comprimento inválido ({len(captcha_val)} caracteres). Recarregando a página...")
                         page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                        tratar_desafio_prodam_auto(page, ocr)
                         time.sleep(1.0)
                         
                         # Re-seleciona a opção do dropdown para forçar o postback
@@ -1794,6 +1798,7 @@ def obter_municipal_sp(cnpj, user_data_dir=None, headless=True):
                                 # Em caso de erro de captcha, recarrega a página inteira para limpar a sessão
                                 print("        [AVISO] Recarregando a página inteira devido a erro de CAPTCHA...")
                                 page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                                tratar_desafio_prodam_auto(page, ocr)
                                 time.sleep(1.0)
                                 
                                 dropdown_xpath = 'xpath=//*[@id="ctl00_ConteudoPrincipal_ddlTipoCertidao"]'

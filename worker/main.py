@@ -966,7 +966,17 @@ def processar_tarefa(tarefa):
         else:
             return emitir_cnd_estadual_via_api(cnpj, uf)
     elif tipo == "MUNICIPAL":
-        return emitir_cnd_municipal_via_api(cnpj, municipio, uf)
+        if uf == "SP" and municipio == "SAO PAULO":
+            # Importado no topo, ou podemos usar test_scrapers.obter_municipal_sp se já importado.
+            # Verificaremos como test_scrapers é importado.
+            import test_scrapers
+            res = test_scrapers.obter_municipal_sp(cnpj)
+            if res.get("status") == "sucesso":
+                return res["pdf_path"], datetime.now().strftime("%Y-%m-%d")
+            else:
+                raise Exception(res.get("mensagem", "Falha desconhecida"))
+        else:
+            return emitir_cnd_municipal_via_api(cnpj, municipio, uf)
     else:
         raise NotImplementedError(f"Tipo de certidão '{tipo}' não possui robô/integração implementada.")
 
@@ -1024,9 +1034,10 @@ def rodar_worker():
                 error_msg = str(rpa_err)
                 logger.error(f"Erro na execução da tarefa: {error_msg}")
                 
-                # Retorna a fila para pendente para nova tentativa futura
+                # Retorna a fila para pendente para nova tentativa futura, ou falha se excedeu
+                novo_status = "falha" if tarefa.get("tentativas", 1) >= 3 else "pendente"
                 supabase.table("fila_execucao").update({
-                    "status": "pendente",
+                    "status": novo_status,
                     "log_erro": error_msg,
                     "updated_at": datetime.utcnow().isoformat()
                 }).eq("id", tarefa["fila_id"]).execute()
