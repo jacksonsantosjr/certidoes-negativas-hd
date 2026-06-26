@@ -506,85 +506,182 @@ def emitir_cnd_federal(cnpj):
             if "insuficientes" in body_text or "Não foi possível concluir" in body_text:
                 logger.info("[FEDERAL] Impedimento para nova emissão detectado. Tentando obter última certidão válida (segunda via)...")
                 
-                # 1. Limpa cookies e storage para que o portal trate o próximo envio como nova sessão e mostre o modal
-                try:
-                    context.clear_cookies()
-                    page.evaluate("window.localStorage.clear(); window.sessionStorage.clear();")
-                    logger.info("[FEDERAL] Cookies e storage da sessão limpos para reset do portal.")
-                except Exception as clear_err:
-                    logger.warning(f"[FEDERAL] Erro ao limpar cookies/storage: {clear_err}")
+                # Distingue dois cenários de erro:
+                # A) Tela de "Resultado da Emissão" com "insuficientes" - tem botão "+ Nova Consulta"
+                # B) Erro 023 "Não foi possível concluir" no formulário - tem botões "Consultar Certidão" / "Emitir Certidão"
+                btn_nova_consulta = 'button:has-text("Nova Consulta")'
+                is_resultado_insuficientes = page.locator(btn_nova_consulta).is_visible()
                 
-                # 2. Recarrega a página home limpa
-                try:
-                    page.reload()
-                    page.wait_for_selector(cnpj_selector, timeout=15000)
-                except Exception as reload_err:
-                    logger.warning(f"[FEDERAL] Erro ao recarregar página: {reload_err}. Tentando page.goto...")
+                if is_resultado_insuficientes:
+                    # ===== CENÁRIO A: Tela de resultado "insuficientes" =====
+                    logger.info("[FEDERAL] Tela de resultado 'insuficientes' detectada. Clicando em '+ Nova Consulta'...")
+                    page.click(btn_nova_consulta)
+                    time.sleep(2.0)
+                    
+                    # Aguarda o formulário carregar e preenche o CNPJ
                     try:
-                        page.goto("https://servicos.receitafederal.gov.br/servico/certidoes/#/home/cnpj")
                         page.wait_for_selector(cnpj_selector, timeout=15000)
-                    except:
-                        pass
-                
-                time.sleep(1.5)
-                page.focus(cnpj_selector)
-                page.click(cnpj_selector)
-                page.type(cnpj_selector, cnpj_limpo, delay=60)
-                page.press(cnpj_selector, "Tab")
-                time.sleep(1.0)
-                
-                # 3. Clica em Emitir para disparar o modal de certidão válida existente
-                page.click(btn_selector)
-                
-                # 4. No modal, clica em "Consultar Certidão" (primeiro botão)
-                btn_consultar_modal = 'xpath=/html/body/modal-container/div[2]/div/div[3]/button[1]'
-                try:
-                    page.wait_for_selector('modal-container', timeout=15000)
-                except:
+                    except Exception:
+                        for alt_sel in ['input[name="niContribuinte"]', 'input[placeholder="Informe o CNPJ"]']:
+                            try:
+                                page.wait_for_selector(alt_sel, timeout=5000)
+                                cnpj_selector = alt_sel
+                                break
+                            except:
+                                continue
+                    
+                    time.sleep(1.0)
+                    page.focus(cnpj_selector)
+                    page.click(cnpj_selector, click_count=3)
+                    page.keyboard.press("Backspace")
+                    time.sleep(0.5)
+                    page.type(cnpj_selector, cnpj_limpo, delay=60)
+                    page.press(cnpj_selector, "Tab")
+                    time.sleep(1.0)
+                    
+                    # Aceita cookies se aparecer
                     try:
-                        page.wait_for_selector(btn_consultar_modal, timeout=5000)
+                        btn_cookies = 'button:has-text("Aceitar")'
+                        if page.locator(btn_cookies).is_visible():
+                            page.click(btn_cookies)
+                            time.sleep(0.5)
                     except:
                         pass
-                
-                time.sleep(1.0)
-                if page.locator(btn_consultar_modal).is_visible():
-                    page.click(btn_consultar_modal)
-                    logger.info("[FEDERAL] Clicou em Consultar Certidão no modal.")
-                else:
-                    btn_text_sel = 'button:has-text("Consultar Certidão")'
-                    if page.locator(btn_text_sel).is_visible():
-                        page.click(btn_text_sel)
-                        logger.info("[FEDERAL] Clicou em Consultar Certidão no modal via texto.")
-                    else:
+                    
+                    # Clica em "Emitir Certidão" para disparar o modal
+                    try:
+                        page.wait_for_selector(btn_selector, timeout=10000)
+                    except:
+                        btn_selector = 'button:has-text("Emitir Certidão")'
+                        page.wait_for_selector(btn_selector, timeout=5000)
+                    page.click(btn_selector)
+                    time.sleep(1.5)
+                    
+                    # No modal, clica em "Consultar Certidão" (primeiro botão)
+                    btn_consultar_modal = 'xpath=/html/body/modal-container/div[2]/div/div[3]/button[1]'
+                    modal_found = False
+                    try:
+                        page.wait_for_selector('modal-container', timeout=15000)
+                        modal_found = True
+                    except:
                         try:
-                            page.locator("modal-container .modal-footer button").first.click()
-                            logger.info("[FEDERAL] Clicou no primeiro botão do modal-footer.")
-                        except Exception as modal_click_err:
-                            logger.warning(f"[FEDERAL] Falha ao tentar clicar no modal: {modal_click_err}")
-                time.sleep(2.0)
+                            page.wait_for_selector(btn_consultar_modal, timeout=5000)
+                            modal_found = True
+                        except:
+                            pass
+                    
+                    if modal_found:
+                        time.sleep(1.0)
+                        if page.locator(btn_consultar_modal).is_visible():
+                            page.click(btn_consultar_modal)
+                            logger.info("[FEDERAL] Clicou em Consultar Certidão no modal.")
+                        else:
+                            btn_text_sel = 'button:has-text("Consultar Certidão")'
+                            if page.locator(btn_text_sel).is_visible():
+                                page.click(btn_text_sel)
+                                logger.info("[FEDERAL] Clicou em Consultar Certidão no modal via texto.")
+                            else:
+                                try:
+                                    page.locator("modal-container .modal-footer button").first.click()
+                                    logger.info("[FEDERAL] Clicou no primeiro botão do modal-footer.")
+                                except Exception as modal_click_err:
+                                    logger.warning(f"[FEDERAL] Falha ao tentar clicar no modal: {modal_click_err}")
+                        time.sleep(2.0)
+                    else:
+                        # Sem modal - tenta "Consultar Certidão" direto no formulário
+                        logger.info("[FEDERAL] Modal não apareceu após Nova Consulta. Tentando Consultar direto...")
+                        btn_consultar_direto = 'button:has-text("Consultar Certidão")'
+                        if page.locator(btn_consultar_direto).is_visible():
+                            page.click(btn_consultar_direto)
+                            time.sleep(2.0)
+                        else:
+                            raise Exception("Não foi possível acessar a tela de consulta de certidões existentes.")
+                    
+                    # Clica no botão de consultar no formulário intermediário (se existir)
+                    btn_consultar_form = 'xpath=/html/body/app-root/mf-portal-layout/portal-main-layout/div/main/ng-component/ng-component/ng-component/app-informar-parametro-pj/app-informar-parametro/form/div[2]/button'
+                    try:
+                        page.wait_for_selector(btn_consultar_form, timeout=8000)
+                        page.click(btn_consultar_form)
+                        logger.info("[FEDERAL] Clicou no botão Consultar do formulário de consulta.")
+                        time.sleep(2.0)
+                    except:
+                        try:
+                            btn_text_form = 'form button:has-text("Consultar Certidão")'
+                            if page.locator(btn_text_form).is_visible():
+                                page.click(btn_text_form)
+                                time.sleep(2.0)
+                        except:
+                            pass
                 
-                # 5. Clica no botão de consultar no formulário de consulta
-                btn_consultar_form = 'xpath=/html/body/app-root/mf-portal-layout/portal-main-layout/div/main/ng-component/ng-component/ng-component/app-informar-parametro-pj/app-informar-parametro/form/div[2]/button'
+                else:
+                    # ===== CENÁRIO B: Erro 023 "Não foi possível concluir" no formulário =====
+                    # O CNPJ já está preenchido e os botões "Consultar Certidão" e "Emitir Certidão" estão visíveis
+                    logger.info("[FEDERAL] Erro 023 do portal detectado (rate-limit). Aguardando 10s antes de consultar...")
+                    time.sleep(10.0)
+                    
+                    # Fecha o alerta/banner de erro se existir
+                    try:
+                        close_btn = page.locator('button[aria-label="close"], .close, button:has-text("×")')
+                        if close_btn.is_visible():
+                            close_btn.first.click()
+                            time.sleep(1.0)
+                    except:
+                        pass
+                    
+                    # Tenta clicar em "Consultar Certidão" diretamente
+                    btn_consultar_direto = 'button:has-text("Consultar Certidão")'
+                    for tentativa in range(1, 4):  # Até 3 tentativas
+                        if page.locator(btn_consultar_direto).is_visible():
+                            page.click(btn_consultar_direto)
+                            logger.info(f"[FEDERAL] Tentativa {tentativa}: Clicou em Consultar Certidão.")
+                            time.sleep(3.0)
+                            
+                            # Verifica se o erro 023 desapareceu
+                            body_after = page.locator("body").inner_text()
+                            if "Não foi possível concluir" not in body_after:
+                                logger.info("[FEDERAL] Erro 023 resolvido! Prosseguindo com consulta...")
+                                break
+                            else:
+                                if tentativa < 3:
+                                    wait_time = 15 * tentativa
+                                    logger.info(f"[FEDERAL] Erro 023 persiste. Aguardando {wait_time}s antes da próxima tentativa...")
+                                    time.sleep(wait_time)
+                                else:
+                                    raise Exception("Portal da Receita Federal temporariamente indisponível (erro 023). Tente novamente em alguns minutos.")
+                        else:
+                            raise Exception("Botão Consultar Certidão não encontrado no formulário.")
+                    
+                    # Clica no botão do formulário intermediário se existir
+                    btn_consultar_form = 'xpath=/html/body/app-root/mf-portal-layout/portal-main-layout/div/main/ng-component/ng-component/ng-component/app-informar-parametro-pj/app-informar-parametro/form/div[2]/button'
+                    try:
+                        page.wait_for_selector(btn_consultar_form, timeout=8000)
+                        page.click(btn_consultar_form)
+                        logger.info("[FEDERAL] Clicou no botão Consultar do formulário de consulta.")
+                        time.sleep(2.0)
+                    except:
+                        try:
+                            btn_text_form = 'form button:has-text("Consultar Certidão")'
+                            if page.locator(btn_text_form).is_visible():
+                                page.click(btn_text_form)
+                                time.sleep(2.0)
+                        except:
+                            pass
+                
+                # ===== PARTE COMUM: Tabela de resultados =====
                 try:
-                    page.wait_for_selector(btn_consultar_form, timeout=15000)
-                    page.click(btn_consultar_form)
-                except Exception as form_err:
-                    logger.warning(f"[FEDERAL] Botão de consulta do formulário não encontrado por xpath: {form_err}. Tentando por texto...")
-                    btn_text_form = 'form button:has-text("Consultar Certidão")'
-                    if not page.locator(btn_text_form).is_visible():
-                        btn_text_form = 'button:has-text("Consultar Certidão")'
-                    page.click(btn_text_form)
-                time.sleep(2.0)
-                
-                # 4. Na tabela de resultados, localiza a linha da certidão válida com maior data de vencimento
-                page.wait_for_selector("datatable-body-row", timeout=15000)
+                    page.wait_for_selector("datatable-body-row", timeout=15000)
+                except Exception as table_err:
+                    logger.error(f"[FEDERAL] Tabela de resultados não carregou: {table_err}")
+                    raise Exception(f"Tabela de certidões não carregou após consulta: {table_err}")
                 
                 import re
                 
                 valid_rows = []
                 rows = page.locator("datatable-body-row").all()
+                logger.info(f"[FEDERAL] Encontradas {len(rows)} linhas na tabela de certidões.")
                 for idx, row in enumerate(rows):
                     cells_text = [c.inner_text().strip() for c in row.locator("datatable-body-cell").all()]
+                    logger.info(f"[FEDERAL] Linha {idx}: {cells_text}")
                     # Verifica se a certidão está válida no portal
                     if any("Válida" in t for t in cells_text):
                         validity_date = None
