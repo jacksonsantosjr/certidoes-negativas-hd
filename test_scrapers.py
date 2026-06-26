@@ -844,6 +844,14 @@ def testar_municipal_sp(cnpj):
         """)
         page = context.new_page()
         
+        # Intercepta e aborta requisições de telemetria do WAF (F5) para evitar ERR_EMPTY_RESPONSE no postback
+        def intercept_route(route):
+            if "/TSPD/" in route.request.url:
+                route.abort()
+            else:
+                route.continue_()
+        page.route("**/*", intercept_route)
+        
         try:
             page.goto(url, wait_until="domcontentloaded", timeout=30000)
             
@@ -1423,6 +1431,14 @@ def obter_municipal_sp(cnpj, user_data_dir=None, headless=True):
             """)
             page = context.new_page()
             
+            # Intercepta e aborta requisições de telemetria do WAF (F5) para evitar ERR_EMPTY_RESPONSE no postback
+            def intercept_route(route):
+                if "/TSPD/" in route.request.url:
+                    route.abort()
+                else:
+                    route.continue_()
+            page.route("**/*", intercept_route)
+            
             try:
                 # Acesso rápido para evitar telemetria de WAF
                 page.goto(url, wait_until="domcontentloaded", timeout=30000)
@@ -1452,7 +1468,7 @@ def obter_municipal_sp(cnpj, user_data_dir=None, headless=True):
                 captcha_img_xpath = 'xpath=//*[@id="ctl00_ConteudoPrincipal_imgCaptcha"]'
                 captcha_input_xpath = 'xpath=//*[@id="ctl00_ConteudoPrincipal_txtValorCaptcha"]'
                 emitir_btn_xpath = 'xpath=//*[@id="ctl00_ConteudoPrincipal_btnEmitir"]'
-                erro_selector = "#ctl00_ConteudoPrincipal_lblMensagem, .alert, .erro, .mensagem-erro"
+                erro_selector = "#ctl00_ConteudoPrincipal_lblMensagem, #ctl00_ConteudoPrincipal_lblValidacao, .alert, .erro, .mensagem-erro"
                 
                 max_tentativas = 10
                 captcha_resolvido = False
@@ -1521,7 +1537,10 @@ def obter_municipal_sp(cnpj, user_data_dir=None, headless=True):
                             print(f"        [AVISO] Conexão interrompida pelo WAF/rede pós-submissão: {d_err}")
                             raise NetworkError(f"Conexão interrompida pelo WAF/rede pós-submissão: {d_err}")
                             
-                        time.sleep(1.0)
+                        # Aguarda um pequeno período para o navegador renderizar a tela nativa de erro de conexão
+                        time.sleep(2.0)
+                        verificar_erro_rede(page)
+                        
                         tratar_desafio_prodam_auto(page, ocr)
                         verificar_erro_rede(page)
                         
@@ -1536,7 +1555,21 @@ def obter_municipal_sp(cnpj, user_data_dir=None, headless=True):
                                     
                         if erro_msg:
                             print(f"        Mensagem do portal: '{erro_msg}'")
-                            if any(kwd in erro_msg.lower() for kwd in ["captcha", "imagem", "código", "segurança", "inválido"]):
+                            if any(kwd in erro_msg.lower() for kwd in ["captcha", "imagem", "código", "segurança", "inválido", "validação"]):
+                                # Em caso de erro de captcha, recarrega a página inteira para limpar a sessão
+                                print("        [AVISO] Recarregando a página inteira devido a erro de CAPTCHA...")
+                                page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                                time.sleep(1.0)
+                                
+                                dropdown_xpath = 'xpath=//*[@id="ctl00_ConteudoPrincipal_ddlTipoCertidao"]'
+                                page.wait_for_selector(dropdown_xpath, timeout=15000)
+                                page.select_option(dropdown_xpath, label="Certidão Tributária Mobiliária")
+                                time.sleep(2.0)
+                                tratar_desafio_prodam_auto(page, ocr)
+                                
+                                cnpj_input_xpath = 'xpath=//*[@id="ctl00_ConteudoPrincipal_txtCNPJ"]'
+                                page.wait_for_selector(cnpj_input_xpath, timeout=15000)
+                                page.fill(cnpj_input_xpath, cnpj_limpo)
                                 continue
                             else:
                                 return {"status": "erro", "mensagem": f"Erro no portal Municipal SP: {erro_msg}"}
