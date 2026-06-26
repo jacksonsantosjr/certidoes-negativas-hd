@@ -16,7 +16,7 @@ def test_municipal_stealth():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
             viewport={"width": 1280, "height": 800},
             locale="pt-BR",
             timezone_id="America/Sao_Paulo"
@@ -37,9 +37,9 @@ def test_municipal_stealth():
             print(f"Navegando para {url}")
             page.goto(url, wait_until="domcontentloaded", timeout=30000)
             
-            # Close cookie popup
+            # Close cookie popup by authorizing all cookies
             try:
-                cookie_btn = page.locator('text="Sair sem autorizar"')
+                cookie_btn = page.locator('.cc__button__autorizacao--all')
                 if cookie_btn.count() > 0:
                     cookie_btn.click()
                     time.sleep(0.5)

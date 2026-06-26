@@ -126,9 +126,10 @@ def processar_tarefa(tarefa):
             url_pdf = supabase.storage.from_("cnds-arquivos").get_public_url(storage_path)
             log_msg(f"    [STORAGE] Upload concluído. URL: {url_pdf}")
             
-            # 3b. Atualiza tabelas
             hoje = datetime.date.today().isoformat()
-            vencimento = calcular_vencimento(tipo_certidao, hoje)
+            vencimento = resultado.get("data_vencimento")
+            if not vencimento:
+                vencimento = calcular_vencimento(tipo_certidao, hoje)
             
             # Atualiza certidoes_matriz
             supabase.table("certidoes_matriz").update({

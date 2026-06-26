@@ -1082,6 +1082,22 @@ def obter_fgts(cnpj, uf="SP", headless=True):
                 btn_imprimir = '[id="mainForm:btImprimir4"]'
                 page.wait_for_selector(btn_imprimir, timeout=15000)
                 
+                # Extrai a data de validade a partir do texto do body do portal da Caixa
+                body_text = ""
+                try:
+                    body_text = page.locator("body").inner_text()
+                except Exception as body_ex:
+                    print(f"[AVISO] Falha ao ler o body_text para validade do FGTS: {body_ex}")
+                
+                import re
+                validade_match = re.search(r"Validade:\s*(\d{2}/\d{2}/\d{4})\s*(?:a|à)\s*(\d{2}/\d{2}/\d{4})", body_text, re.IGNORECASE)
+                data_vencimento = None
+                if validade_match:
+                    partes = validade_match.group(2).split("/")
+                    if len(partes) == 3:
+                        data_vencimento = f"{partes[2]}-{partes[1]}-{partes[0]}"
+                        print(f"[FGTS] Vencimento real extraído: {data_vencimento}")
+                
                 page.evaluate("window.print = () => {}")
                 page.click(btn_imprimir)
                 page.emulate_media(media="print")
@@ -1099,7 +1115,7 @@ def obter_fgts(cnpj, uf="SP", headless=True):
                 if os.path.exists(screenshot_path):
                     os.remove(screenshot_path)
                     
-                return {"status": "sucesso", "pdf_path": temp_pdf_path}
+                return {"status": "sucesso", "pdf_path": temp_pdf_path, "data_vencimento": data_vencimento}
             else:
                 return {"status": "erro", "mensagem": "Não foi possível localizar o link do CRF após a consulta."}
                 
