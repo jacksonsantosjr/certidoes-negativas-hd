@@ -361,9 +361,13 @@ function renderizarFilaTable() {
     dom.filaTbody.innerHTML = filaData.map(f => {
         const matriz = f.certidoes_matriz || {};
         const empresa = matriz.empresas || {};
-        const statusBadge = getFilaStatusBadge(f.status);
+        const statusBadge = getFilaStatusBadge(f.status, f.log_erro);
         const dataAgendada = formatarDataHora(f.data_agendamento);
         const erroLog = f.log_erro ? `<span style="font-family: monospace; font-size: 12px; color: var(--color-danger); display: block; max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${f.log_erro}">${f.log_erro}</span>` : '<span style="color: var(--text-muted); font-size: 12px;">Nenhum erro</span>';
+
+        const virtualStatus = f.status === 'falha' && f.log_erro && f.log_erro.startsWith('[PAUSADO]') ? 'pausado' 
+                            : f.status === 'falha' && f.log_erro && f.log_erro.startsWith('[CANCELADO]') ? 'cancelado' 
+                            : f.status;
 
         return `
             <tr>
@@ -376,9 +380,19 @@ function renderizarFilaTable() {
                 <td style="text-align: center;">${f.tentativas} / ${f.max_tentativas}</td>
                 <td>${erroLog}</td>
                 <td>
-                    <button class="btn-icon btn-reset-fila" data-id="${f.id}" title="Re-processar (Pendente)" ${f.status === 'pendente' || f.status === 'processando' ? 'disabled style="opacity: 0.3;"' : ''}>
+                    <button class="btn-icon btn-reset-fila" data-id="${f.id}" title="Re-processar (Pendente)" ${virtualStatus === 'pendente' || virtualStatus === 'processando' ? 'disabled style="opacity: 0.3;"' : ''}>
                         <i class="fa-solid fa-redo"></i>
                     </button>
+                    ${virtualStatus === 'pendente' ? `
+                    <button class="btn-icon btn-pause-fila" data-id="${f.id}" title="Pausar Processamento" style="color: var(--color-warning);">
+                        <i class="fa-solid fa-pause"></i>
+                    </button>
+                    ` : ''}
+                    ${virtualStatus === 'pendente' || virtualStatus === 'pausado' ? `
+                    <button class="btn-icon btn-cancel-fila" data-id="${f.id}" title="Cancelar Processamento" style="color: var(--color-danger);">
+                        <i class="fa-solid fa-ban"></i>
+                    </button>
+                    ` : ''}
                 </td>
             </tr>
         `;
@@ -400,6 +414,44 @@ function renderizarFilaTable() {
                 carregarDados();
             } catch (err) {
                 showToast('Erro ao reiniciar fila: ' + err.message, 'error');
+            }
+        });
+    });
+
+    // Evento de pausar
+    document.querySelectorAll('.btn-pause-fila').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const id = btn.getAttribute('data-id');
+            try {
+                const { error } = await supabaseClient.from('fila_execucao').update({
+                    status: 'falha',
+                    log_erro: '[PAUSADO] Pausado manualmente via Dashboard.'
+                }).eq('id', id);
+
+                if (error) throw error;
+                showToast('Processamento pausado!', 'info');
+                carregarDados();
+            } catch (err) {
+                showToast('Erro ao pausar: ' + err.message, 'error');
+            }
+        });
+    });
+
+    // Evento de cancelar
+    document.querySelectorAll('.btn-cancel-fila').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const id = btn.getAttribute('data-id');
+            try {
+                const { error } = await supabaseClient.from('fila_execucao').update({
+                    status: 'falha',
+                    log_erro: '[CANCELADO] Cancelado manualmente via Dashboard.'
+                }).eq('id', id);
+
+                if (error) throw error;
+                showToast('Processamento cancelado!', 'info');
+                carregarDados();
+            } catch (err) {
+                showToast('Erro ao cancelar: ' + err.message, 'error');
             }
         });
     });
@@ -566,14 +618,22 @@ function getStatusBadge(status) {
     }
 }
 
-function getFilaStatusBadge(status) {
-    switch (status) {
+function getFilaStatusBadge(status, logErro = '') {
+    const virtualStatus = status === 'falha' && logErro && logErro.startsWith('[PAUSADO]') ? 'pausado' 
+                        : status === 'falha' && logErro && logErro.startsWith('[CANCELADO]') ? 'cancelado' 
+                        : status;
+
+    switch (virtualStatus) {
         case 'sucesso':
             return `<span class="badge badge-regular"><i class="fa-solid fa-check"></i> Sucesso</span>`;
         case 'falha':
             return `<span class="badge badge-vencida"><i class="fa-solid fa-xmark"></i> Falha</span>`;
         case 'processando':
             return `<span class="badge badge-renovacao"><i class="fa-solid fa-spinner fa-spin"></i> Processando</span>`;
+        case 'pausado':
+            return `<span class="badge badge-erro"><i class="fa-solid fa-pause"></i> Pausado</span>`;
+        case 'cancelado':
+            return `<span class="badge badge-vencida"><i class="fa-solid fa-ban"></i> Cancelado</span>`;
         default:
             return `<span class="badge badge-pendente"><i class="fa-solid fa-clock"></i> Aguardando Fila</span>`;
     }
