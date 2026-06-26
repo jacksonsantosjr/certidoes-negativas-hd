@@ -967,12 +967,32 @@ def processar_tarefa(tarefa):
             return emitir_cnd_estadual_via_api(cnpj, uf)
     elif tipo == "MUNICIPAL":
         if uf == "SP" and municipio == "SAO PAULO":
-            # Importado no topo, ou podemos usar test_scrapers.obter_municipal_sp se já importado.
-            # Verificaremos como test_scrapers é importado.
+            import sys
+            import os
+            sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
             import test_scrapers
             res = test_scrapers.obter_municipal_sp(cnpj)
             if res.get("status") == "sucesso":
-                return res["pdf_path"], datetime.now().strftime("%Y-%m-%d")
+                pdf_path = res["pdf_path"]
+                vencimento_str = datetime.now().strftime("%Y-%m-%d")
+                try:
+                    import PyPDF2
+                    import re
+                    with open(pdf_path, "rb") as f:
+                        reader = PyPDF2.PdfReader(f)
+                        text = ""
+                        for page in reader.pages:
+                            text += page.extract_text() + "\n"
+                        match = re.search(r"Validade:\s*(\d{2}/\d{2}/\d{4})", text, re.IGNORECASE)
+                        if match:
+                            vencimento_br = match.group(1)
+                            vencimento_str = datetime.strptime(vencimento_br, "%d/%m/%Y").strftime("%Y-%m-%d")
+                        else:
+                            print("[AVISO] Nao encontrou a data de validade no PDF.")
+                except Exception as e:
+                    print(f"Erro ao extrair validade do PDF MUNICIPAL SP: {e}")
+
+                return pdf_path, vencimento_str
             else:
                 raise Exception(res.get("mensagem", "Falha desconhecida"))
         else:
