@@ -19,7 +19,19 @@
     <link rel="stylesheet" href="style.css">
 </head>
 <body class="light-mode">
-    <div class="app-container">
+    <!-- Hero Section de Entrada -->
+    <div id="hero-section" class="hero-container">
+        <div class="hero-content">
+            <img src="logo.png" class="hero-logo" alt="Home Doctor Logo">
+            <h1>Automação Inteligente de Certidões</h1>
+            <p>Monitore, gerencie e emita todas as CNDs corporativas do grupo empresarial em tempo real em um painel unificado.</p>
+            <button class="btn btn-primary btn-large" id="btn-abrir-login">
+                <i class="fa-solid fa-right-to-bracket"></i> Acessar Sistema
+            </button>
+        </div>
+    </div>
+
+    <div class="app-container" style="display: none;">
         
         <!-- Sidebar -->
         <aside class="sidebar">
@@ -43,10 +55,16 @@
                 <a href="#" class="nav-item" id="btn-nav-fila">
                     <i class="fa-solid fa-list-check"></i> <span>Fila de RPA</span>
                 </a>
+                <a href="#" class="nav-item" id="btn-nav-usuarios">
+                    <i class="fa-solid fa-users"></i> <span>Usuários</span>
+                </a>
             </nav>
             <div class="sidebar-footer">
-                <button class="theme-toggle" id="theme-toggle-btn">
+                <button class="theme-toggle" id="theme-toggle-btn" style="margin-bottom: 8px;">
                     <i class="fa-solid fa-sun"></i> <span>Modo Claro</span>
+                </button>
+                <button class="logout-btn" id="btn-logout" title="Sair do Sistema" style="width: 100%; display: flex; align-items: center; gap: 12px; padding: 10px 14px; border: none; background: rgba(239, 68, 68, 0.15); color: #ef4444; border-radius: 8px; cursor: pointer; transition: all 0.2s; font-family: inherit; font-size: 13px; font-weight: 500;">
+                    <i class="fa-solid fa-right-from-bracket"></i> <span>Sair</span>
                 </button>
             </div>
         </aside>
@@ -132,6 +150,8 @@
                                     <option value="CNDT">Trabalhista (CNDT)</option>
                                     <option value="ESTADUAL">Estadual</option>
                                     <option value="MUNICIPAL">Municipal</option>
+                                    <option value="CADIN">CADIN Municipal</option>
+                                    <option value="SICAF">SICAF (Gov.br)</option>
                                 </select>
                             </div>
                             <div class="filter-group">
@@ -218,6 +238,36 @@
                     </div>
                 </section>
                 
+                <!-- SCREEN 4: USUARIOS -->
+                <section id="screen-usuarios" class="screen-section">
+                    <div class="screen-header-actions" style="margin-bottom: 20px; display: flex; justify-content: flex-end;">
+                        <button class="btn btn-primary" id="btn-add-usuario">
+                            <i class="fa-solid fa-user-plus"></i> Novo Usuário
+                        </button>
+                    </div>
+                    <div class="table-container">
+                        <table class="cnd-table" id="table-usuarios-list">
+                            <thead>
+                                <tr>
+                                    <th>Nome</th>
+                                    <th>E-mail</th>
+                                    <th>Perfil</th>
+                                    <th>Módulos Permitidos</th>
+                                    <th>Data Cadastro</th>
+                                    <th>Ações</th>
+                                </tr>
+                            </thead>
+                            <tbody id="usuarios-tbody">
+                                <tr>
+                                    <td colspan="6" class="loading-state">
+                                        <i class="fa-solid fa-spinner fa-spin"></i> Carregando usuários...
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+                
             </div>
         </main>
     </div>
@@ -277,6 +327,12 @@
                             <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 14px; color: var(--text-main);">
                                 <input type="checkbox" id="cert-municipal" value="MUNICIPAL" checked style="width: auto; height: auto; cursor: pointer;"> Municipal
                             </label>
+                            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 14px; color: var(--text-main);">
+                                <input type="checkbox" id="cert-cadin" value="CADIN" checked style="width: auto; height: auto; cursor: pointer;"> CADIN Municipal
+                            </label>
+                            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; color: var(--text-main);">
+                                <input type="checkbox" id="cert-sicaf" value="SICAF" checked style="width: auto; height: auto; cursor: pointer;"> SICAF (Gov.br)
+                            </label>
                         </div>
                     </div>
                 </div>
@@ -287,12 +343,91 @@
             </form>
         </div>
     </div>
+    
+    <!-- MODAL: NOVO USUÁRIO -->
+    <div class="modal-overlay" id="modal-usuario">
+        <div class="modal-card" style="width: 450px;">
+            <div class="modal-header">
+                <h3 id="modal-usuario-titulo">Cadastrar Novo Usuário</h3>
+                <button class="modal-close" id="btn-close-modal-usuario"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <form id="form-usuario" class="modal-form">
+                <div style="display: flex; flex-direction: column; gap: 14px;">
+                    <div class="form-group">
+                        <label for="usuario-nome">Nome Completo</label>
+                        <input type="text" id="usuario-nome" required placeholder="Ex: João da Silva">
+                    </div>
+                    <div class="form-group">
+                        <label for="usuario-email">E-mail</label>
+                        <input type="email" id="usuario-email" required placeholder="Ex: joao@homedoctor.com.br">
+                    </div>
+                    <div class="form-group">
+                        <label for="usuario-perfil">Perfil de Acesso</label>
+                        <select id="usuario-perfil" required>
+                            <option value="Geral">Geral (Usuário Comum)</option>
+                            <option value="Administrador">Administrador</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="usuario-senha">Senha de Acesso</label>
+                        <input type="password" id="usuario-senha" placeholder="Insira a senha do usuário">
+                    </div>
+                    <div class="form-group full-width" style="margin-top: 10px;">
+                        <label style="font-weight: 600; margin-bottom: 8px; display: block; color: var(--text-active);">Módulos Permitidos (Sidebar)</label>
+                        <div class="checkbox-group" style="display: flex; gap: 20px; flex-wrap: wrap; background: rgba(255,255,255,0.02); padding: 12px; border-radius: 8px; border: 1px solid var(--border-glass);">
+                            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 14px; color: var(--text-main);">
+                                <input type="checkbox" id="user-module-dashboard" value="DASHBOARD" checked style="width: auto; height: auto; cursor: pointer;"> Painel Geral
+                            </label>
+                            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 14px; color: var(--text-main);">
+                                <input type="checkbox" id="user-module-empresas" value="EMPRESAS" checked style="width: auto; height: auto; cursor: pointer;"> Empresas
+                            </label>
+                            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 14px; color: var(--text-main);">
+                                <input type="checkbox" id="user-module-fila" value="FILA" checked style="width: auto; height: auto; cursor: pointer;"> Fila de RPA
+                            </label>
+                            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 14px; color: var(--text-main);">
+                                <input type="checkbox" id="user-module-usuarios" value="USUARIOS" checked style="width: auto; height: auto; cursor: pointer;"> Usuários
+                            </label>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer" style="margin-top: 20px;">
+                    <button type="button" class="btn btn-secondary" id="btn-cancelar-usuario">Cancelar</button>
+                    <button type="submit" class="btn btn-primary" id="btn-salvar-usuario">Salvar Usuário</button>
+                </div>
+            </form>
+        </div>
+    </div>
+    
+    <!-- MODAL: LOGIN -->
+    <div class="modal-overlay" id="modal-login">
+        <div class="modal-card" style="width: 400px;">
+            <div class="modal-header">
+                <h3>Acessar Painel</h3>
+                <button class="modal-close" id="btn-close-modal-login"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <form id="form-login-usuario" class="modal-form">
+                <div style="display: flex; flex-direction: column; gap: 14px;">
+                    <div class="form-group">
+                        <label for="login-email">Usuário (E-mail)</label>
+                        <input type="email" id="login-email" required placeholder="Ex: joao@homedoctor.com.br">
+                    </div>
+                    <div class="form-group">
+                        <label for="login-senha">Senha</label>
+                        <input type="password" id="login-senha" required placeholder="Digite sua senha">
+                    </div>
+                </div>
+                <div class="modal-footer" style="margin-top: 20px;">
+                    <button type="submit" class="btn btn-primary" style="width: 100%; justify-content: center;">Entrar</button>
+                </div>
+            </form>
+        </div>
+    </div>
 
     <!-- NOTIFICAÇÕES TOAST -->
     <div class="toast-container" id="toast-container"></div>
 
-    <!-- SDK do Supabase JS via CDN -->
-    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <!-- SDK do Supabase JS Local -->
+    <script src="supabase-js.js"></script>
     
     <!-- Script principal de lógica -->
     <script src="app.js"></script>

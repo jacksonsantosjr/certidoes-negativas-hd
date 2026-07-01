@@ -1,0 +1,11 @@
+# Exclude legacy code, scratch files, and agent directories from linting to avoid breaking constraints
+exclude = [
+    "worker",
+    "worker.py",
+    "test_*.py",
+    "venv",
+    ".git",
+    "__pycache__",
+    "scratch",
+    ".agent",
+]
