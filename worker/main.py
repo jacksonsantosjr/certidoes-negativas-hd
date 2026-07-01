@@ -17,7 +17,11 @@ import requests
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from supabase import create_client, Client
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
+from playwright_stealth import Stealth
+import urllib.parse
+import socket
+import json
 
 # Carrega as variáveis de ambiente do arquivo .env
 load_dotenv()
@@ -1291,32 +1295,82 @@ def emitir_cnd_sicaf(cnpj, fila_id=None):
     # Certificados A1 de CNPJ (e-CNPJ) geralmente têm o CNPJ no Common Name (CN).
     auto_select_policy = json.dumps([{"pattern": "*", "filter": {"SUBJECT": {"CN": f"*{cnpj_limpo}*"}}}])
     
-    with sync_playwright() as p:
-        browser = p.chromium.launch(
-            headless=False,
-            args=[f"--auto-select-certificate-for-urls={auto_select_policy}"]
-        )
-        context = browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-            ignore_https_errors=True
-        )
-        page = context.new_page()
+    def is_port_open(port):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            return s.connect_ex(('127.0.0.1', port)) == 0
+
+    if not is_port_open(9222):
+        logger.info("[SICAF] Google Chrome não está aberto no modo de depuração. Abrindo...")
+        chrome_paths = [
+            os.path.expandvars(r"%ProgramFiles%\Google\Chrome\Application\chrome.exe"),
+            os.path.expandvars(r"%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe"),
+            os.path.expandvars(r"%LocalAppData%\Google\Chrome\Application\chrome.exe")
+        ]
+        chrome_path = "chrome.exe"
+        for p_path in chrome_paths:
+            if os.path.exists(p_path):
+                chrome_path = p_path
+                break
         
-        try:
-            # 1. Acessar a URL inicial
+        # Cria perfil temporário em nossa pasta para evitar travar o Chrome do usuário
+        profile_dir = os.path.join(os.getcwd(), "chrome_debug_profile")
+        if not os.path.exists(profile_dir):
+            os.makedirs(profile_dir, exist_ok=True)
+            
+        cmd = [
+            chrome_path,
+            "--remote-debugging-port=9222",
+            f"--user-data-dir={profile_dir}",
+            f"--auto-select-certificate-for-urls={auto_select_policy}",
+            "--no-first-run",
+            "--no-default-browser-check",
+            "https://www3.comprasnet.gov.br/sicaf-web/index.jsf"
+        ]
+        logger.info(f"[SICAF] Executando Chrome pelo comando: {cmd}")
+        subprocess.Popen(cmd)
+        time.sleep(3.0)
+
+    with sync_playwright() as p:
+        logger.info("[SICAF] Conectando ao Google Chrome...")
+        browser = p.chromium.connect_over_cdp("http://localhost:9222")
+        context = browser.contexts[0]
+        
+        # Encontra se já existe aba do SICAF aberta
+        page = None
+        for p_page in context.pages:
+            if "sicaf" in p_page.url or "gov.br" in p_page.url:
+                page = p_page
+                break
+                
+        if not page:
+            page = context.new_page()
             page.goto("https://www3.comprasnet.gov.br/sicaf-web/index.jsf")
+            
+        Stealth().use_sync(page)
+        try:
             time.sleep(1.0)
             
-            # 2. Clicar no botão do fornecedor
+            # 2. Clicar no botão do fornecedor se visível
             btn_entrar_sso = 'xpath=//*[@id="formLogin:btnEntrarSsoFornecedor"]/span'
-            page.wait_for_selector(btn_entrar_sso, timeout=20000)
-            click_humano(page, btn_entrar_sso)
-            time.sleep(1.0)
+            menu_consultas = 'xpath=//*[@id="menu"]/div[4]/a'
             
-            # 3. Clicar em login com certificado digital
-            btn_cert = 'xpath=//*[@id="login-certificate"]'
-            page.wait_for_selector(btn_cert, timeout=20000)
-            click_humano(page, btn_cert)
+            if page.locator(menu_consultas).count() == 0:
+                # Não está logado, tenta navegar/clicar
+                if "sicaf-web/index.jsf" in page.url or page.locator(btn_entrar_sso).count() > 0:
+                    try:
+                        page.wait_for_selector(btn_entrar_sso, timeout=5000)
+                        click_humano(page, btn_entrar_sso)
+                        time.sleep(1.0)
+                    except:
+                        pass
+                
+                # Clicar em login com certificado digital (espera dinâmica de até 10 segundos)
+                btn_cert = 'xpath=//*[@id="login-certificate"]'
+                try:
+                    page.wait_for_selector(btn_cert, timeout=10000)
+                    click_humano(page, btn_cert)
+                except Exception as e:
+                    logger.warning(f"[SICAF] Botão de certificado digital não apareceu ou falhou: {str(e)}")
             
             # 4. Loop de checagem do Captcha e Login
             logger.info("[SICAF] Aguardando autenticação gov.br (ou intervenção hCaptcha se necessário)...")
@@ -1324,7 +1378,7 @@ def emitir_cnd_sicaf(cnpj, fila_id=None):
             login_sucesso = False
             estado_atual_banco = "processando"
             
-            while tempo_espera < 90:
+            while tempo_espera < 300:
                 btn_confirmar_auth = 'xpath=//*[@id="j_idt109"]/div[1]/a/span'
                 menu_consultas = 'xpath=//*[@id="menu"]/div[4]/a'
                 
