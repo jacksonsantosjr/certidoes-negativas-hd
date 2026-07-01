@@ -1,6 +1,3 @@
-import os
-import sys
-import time
 from playwright.sync_api import sync_playwright
 
 def test_caixa_stealth():

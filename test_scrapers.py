@@ -2,12 +2,7 @@ import sys
 import os
 import time
 import subprocess
-import requests
 from playwright.sync_api import sync_playwright
-import speech_recognition as sr
-from pydub import AudioSegment
-import numpy as np
-import cv2
 import ddddocr
 from PIL import Image
 
@@ -23,7 +18,6 @@ def get_chrome_path():
     return "chrome.exe"
 
 def limpar_chrome_rpa():
-    import subprocess
     try:
         # Finaliza qualquer processo chrome.exe que contenha a porta 9222 na linha de comando
         subprocess.run(
@@ -1463,7 +1457,7 @@ def obter_federal(cnpj, user_data_dir=None, headless=True):
                 print("PDF renderizado em tela. Gerando PDF...")
                 try:
                     page.pdf(path=temp_pdf_path)
-                except Exception as pdf_ex:
+                except Exception:
                     # Fallback para screenshot se não suportado (ex: modo headful)
                     screenshot_path = f"resultado_federal_{cnpj_limpo}.png"
                     page.screenshot(path=screenshot_path, full_page=True)
@@ -1575,7 +1569,7 @@ def obter_cndt(cnpj, headless=True):
                     print(f"    PDF CNDT baixado com sucesso na tentativa {tentativa}.")
                     return {"status": "sucesso", "pdf_path": temp_pdf_path}
                     
-                except Exception as d_err:
+                except Exception:
                     time.sleep(1.0)
                     elementos_erro = page.query_selector_all(erro_selector)
                     erro_msg = ""

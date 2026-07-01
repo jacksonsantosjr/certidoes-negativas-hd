@@ -148,7 +148,7 @@ def processar_tarefa(tarefa):
                 "tentativas": tarefa.get("tentativas", 0) + 1
             }).eq("id", tarefa_id).execute()
             
-            log_msg(f"    [CONCLUÍDO] Fila e certidão atualizadas no Supabase.")
+            log_msg("    [CONCLUÍDO] Fila e certidão atualizadas no Supabase.")
             
             # 3c. Remove o arquivo local temporário
             if os.path.exists(pdf_path):

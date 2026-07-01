@@ -1,6 +1,4 @@
 import os
-import sys
-import time
 import ssl
 from dotenv import load_dotenv
 

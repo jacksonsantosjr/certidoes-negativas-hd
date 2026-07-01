@@ -1,5 +1,4 @@
 import os
-import ssl
 import httpx
 
 # Disable SSL verification globally for httpx (used by supabase-py)

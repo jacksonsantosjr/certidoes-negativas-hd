@@ -1,13 +1,19 @@
 import time
+import math
+import random
 import os
+import ddddocr
 import sys
+import pytesseract
+import cv2
+import numpy as np
+
+# Configura o caminho do Tesseract
+pytesseract.pytesseract.tesseract_cmd = r"C:\Users\jackson.junior\AppData\Local\Programs\Tesseract-OCR\tesseract.exe"
 import ssl
 import logging
 import subprocess
 import requests
-import urllib3
-import speech_recognition as sr
-from pydub import AudioSegment
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from supabase import create_client, Client
@@ -61,6 +67,81 @@ WORKER_ID = f"worker-cnd-{os.getpid()}"
 # ==========================================
 # SEÇÃO DOS ROBÔS DE AUTOMAÇÃO (PLAYWRIGHT)
 # ==========================================
+
+
+def mover_mouse_suave(page, target_x, target_y, steps=None):
+    """
+    Move o cursor do mouse de forma suave até as coordenadas (target_x, target_y)
+    utilizando a curva Ease In-Out (cosseno) para aceleração/desaceleração realista.
+    Adiciona pequenos desvios aleatórios em cada passo intermediário para evitar
+    caminhos perfeitamente retos (detectáveis por firewalls anti-bot).
+    """
+    if steps is None:
+        steps = random.randint(10, 18)
+
+    # Define ponto de partida aleatório simulando uma posição anterior do cursor
+    start_x = random.randint(50, 600)
+    start_y = random.randint(50, 400)
+
+    for i in range(1, steps + 1):
+        t = i / steps
+        # Curva de desaceleração/aceleração suave (cosseno)
+        t_eased = (1 - math.cos(t * math.pi)) / 2
+
+        current_x = start_x + (target_x - start_x) * t_eased
+        current_y = start_y + (target_y - start_y) * t_eased
+
+        # Adiciona um pequeno desvio/ruído humano (exceto no último passo)
+        if i < steps:
+            current_x += random.uniform(-2.0, 2.0)
+            current_y += random.uniform(-2.0, 2.0)
+
+        page.mouse.move(current_x, current_y)
+        # Microtempo de transição humana entre movimentos
+        time.sleep(random.uniform(0.008, 0.018))
+
+
+def click_humano(page, selector):
+    """
+    Substitui o page.click convencional por um movimento físico do cursor
+    até o elemento, seguido por um clique pressionado realisticamente
+    (mouse down -> pequena espera -> mouse up).
+    Se o elemento não tiver bounding box visível, faz fallback para page.click().
+    """
+    try:
+        element = page.locator(selector).first
+        element.wait_for(state="visible", timeout=10000)
+
+        box = element.bounding_box()
+        if not box:
+            # Fallback de segurança caso o elemento esteja fora do viewport
+            logger.info(f"[MOUSE] Elemento sem bounding box, usando clique direto: {selector}")
+            element.click()
+            return
+
+        # Calcula coordenadas centrais do botão com variação aleatória de pixels
+        # para não clicar sempre na coordenada exata central matemática
+        target_x = box["x"] + box["width"] / 2 + random.uniform(-box["width"] / 6, box["width"] / 6)
+        target_y = box["y"] + box["height"] / 2 + random.uniform(-box["height"] / 6, box["height"] / 6)
+
+        # Move o cursor até o destino de forma suave
+        mover_mouse_suave(page, target_x, target_y)
+
+        # Tempo de reação humano antes de clicar
+        time.sleep(random.uniform(0.15, 0.35))
+
+        # Clique físico realista (down -> hold -> up)
+        page.mouse.down()
+        time.sleep(random.uniform(0.06, 0.12))
+        page.mouse.up()
+    except Exception as e:
+        # Fallback para clique padrão em caso de qualquer erro
+        logger.warning(f"[MOUSE] Fallback para clique direto por erro: {e}")
+        try:
+            page.click(selector)
+        except Exception:
+            page.locator(selector).first.click()
+
 
 def solver_captcha_se_necessario(page, site_name):
     """
@@ -413,9 +494,7 @@ def emitir_cnd_federal(cnpj):
             
             # Adiciona delay antes de interagir com o campo
             time.sleep(1.0)
-            page.focus(cnpj_selector)
-            time.sleep(0.5)
-            page.click(cnpj_selector)
+            click_humano(page, cnpj_selector)
             time.sleep(0.5)
             
             # Digita o CNPJ com delay entre as teclas
@@ -431,7 +510,7 @@ def emitir_cnd_federal(cnpj):
                 btn_cookies = 'button:has-text("Aceitar")'
                 if page.locator(btn_cookies).is_visible():
                     time.sleep(1.0)
-                    page.click(btn_cookies)
+                    click_humano(page, btn_cookies)
                     time.sleep(1.5)
             except:
                 pass
@@ -449,9 +528,7 @@ def emitir_cnd_federal(cnpj):
                 page.wait_for_selector(btn_selector, timeout=5000)
                 
             time.sleep(0.5)
-            page.hover(btn_selector)
-            time.sleep(0.3)
-            page.click(btn_selector)
+            click_humano(page, btn_selector)
             time.sleep(1.0)
             
             # Trata o caso de certidão válida já existente (Modal)
@@ -476,26 +553,18 @@ def emitir_cnd_federal(cnpj):
                 if usar_fallback_consulta:
                     logger.info(f"[FEDERAL] Fallback ativado para {cnpj}! Clicando em Consultar Certidão no modal...")
                     if page.locator(btn_consultar_modal).is_visible():
-                        page.hover(btn_consultar_modal)
-                        time.sleep(0.5)
-                        page.click(btn_consultar_modal)
+                        click_humano(page, btn_consultar_modal)
                     else:
-                        page.hover(btn_texto_consultar)
-                        time.sleep(0.5)
-                        page.click(btn_texto_consultar)
+                        click_humano(page, btn_texto_consultar)
                     # Remove do fallback pois já consumimos
                     remove_fallback_cnpj(cnpj_limpo)
                     logger.info("Modal tratado com Consultar Certidão (Fallback).")
                 else:
                     if page.locator(btn_xpath).is_visible():
-                        page.hover(btn_xpath)
-                        time.sleep(0.5)
-                        page.click(btn_xpath)
+                        click_humano(page, btn_xpath)
                         logger.info(f"Modal tratado clicando no xpath: {btn_xpath}")
                     elif page.locator(btn_texto).is_visible():
-                        page.hover(btn_texto)
-                        time.sleep(0.5)
-                        page.click(btn_texto)
+                        click_humano(page, btn_texto)
                         logger.info(f"Modal tratado clicando no texto: {btn_texto}")
                     else:
                         # Fallback final tentando forçar clique se existir no DOM
@@ -752,7 +821,7 @@ def emitir_cnd_fgts(cnpj, uf):
     temp_pdf_path = f"temp_fgts_{cnpj}.pdf"
     
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        browser = p.chromium.launch(headless=False)
         context = browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
         )
@@ -854,6 +923,7 @@ def emitir_cnd_cndt(cnpj):
     """
     logger.info(f"[CNDT] Iniciando consulta para o CNPJ: {cnpj}")
     temp_pdf_path = f"temp_cndt_{cnpj}.pdf"
+    ocr = ddddocr.DdddOcr(show_ad=False)
     
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
@@ -873,36 +943,110 @@ def emitir_cnd_cndt(cnpj):
             page.wait_for_selector(cnpj_selector, timeout=20000)
             page.fill(cnpj_selector, cnpj)
             
-            solver_captcha_se_necessario(page, "CNDT")
+            captcha_img_sel = 'img[id*="captcha"], img[id*="Captcha"], img[src^="data:image"]'
+            captcha_input_sel = '[id="idCampoResposta"]'
+            btn_emitir = '[id="gerarCertidaoForm:btnEmitirCertidao"]'
+            erro_selector = ".mensagem-erro, .erro, .alert, #messages, ul.erro, [id='gerarCertidaoForm:mensagens'], #mensagens, .erros, [id*='areaMensagemErro']"
             
-            btn_emitir = 'xpath=//*[@id="gerarCertidaoForm:btnEmitirCertidao"]'
-            page.wait_for_selector(btn_emitir, timeout=10000)
-            
-            # Tratamento de Erros / Verificação do Documento
-            erro_selector = ".mensagem-erro, .erro, .alert, #messages, ul.erro, #mensagens, .erros, [id*='areaMensagemErro']"
-            
-            try:
-                with page.expect_download(timeout=25000) as download_info:
-                    page.click(btn_emitir)
+            max_tentativas = 30
+            for tentativa in range(1, max_tentativas + 1):
+                logger.info(f"[CNDT CAPTCHA] Tentativa {tentativa}/{max_tentativas}...")
                 
-                download = download_info.value
-                download.save_as(temp_pdf_path)
-                logger.info(f"[CNDT] PDF real da certidão CNDT baixado com sucesso em {temp_pdf_path}")
-            except Exception as d_err:
-                logger.warning("[CNDT] Download automático não iniciou. Verificando erros na página...")
-                elementos_erro = page.query_selector_all(erro_selector)
-                erro_msg = ""
-                for el in elementos_erro:
-                    if el.is_visible():
-                        txt = el.inner_text().strip()
-                        if txt:
-                            erro_msg = txt
-                            break
-                if erro_msg:
-                    raise Exception(f"Erro no portal da CNDT: {erro_msg}")
+                img_el = page.locator(captcha_img_sel).first
+                img_el.wait_for(state="attached", timeout=15000)
+                
+                img_bytes = None
+                src = img_el.get_attribute("src")
+                if src and src.startswith("data:image"):
+                    import base64
+                    try:
+                        header, base64_data = src.split(",", 1)
+                        img_bytes = base64.b64decode(base64_data)
+                        logger.info("[CNDT CAPTCHA] Imagem extraída diretamente via Base64 do atributo 'src'.")
+                    except Exception as b64_err:
+                        logger.warning(f"[CNDT CAPTCHA] Erro ao decodificar Base64: {b64_err}")
+                
+                if not img_bytes:
+                    try:
+                        img_el.wait_for(state="visible", timeout=5000)
+                        img_bytes = img_el.screenshot()
+                    except Exception as s_err:
+                        logger.warning(f"[CNDT CAPTCHA] Falha no screenshot do elemento: {s_err}. Capturando página inteira...")
+                        temp_cndt_snap = f"temp_cndt_captcha_snap_{cnpj}.png"
+                        page.screenshot(path=temp_cndt_snap)
+                        with open(temp_cndt_snap, "rb") as f:
+                            img_bytes = f.read()
+                        if os.path.exists(temp_cndt_snap):
+                            os.remove(temp_cndt_snap)
+                
+                if tentativa <= 15:
+                    captcha_val = ocr.classification(img_bytes)
+                    captcha_val = "".join([c for c in captcha_val if c.isascii() and c.isalnum()])
+                    logger.info(f"ddddocr leu: '{captcha_val}'")
                 else:
-                    raise Exception(f"Falha ao iniciar download ou erro não identificado: {d_err}")
+                    try:
+                        nparr = np.frombuffer(img_bytes, np.uint8)
+                        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                        resized = cv2.resize(gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+                        blur = cv2.GaussianBlur(resized, (3, 3), 0)
+                        thresh = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1]
+                        
+                        config = "--psm 8 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+                        captcha_val = pytesseract.image_to_string(thresh, config=config).strip()
+                        captcha_val = "".join([c for c in captcha_val if c.isascii() and c.isalnum()])
+                        logger.info(f"pytesseract (fallback) leu: '{captcha_val}'")
+                    except Exception as ocr_err:
+                        logger.warning(f"Erro ao processar pytesseract fallback: {ocr_err}")
+                        captcha_val = ""
                 
+                page.fill(captcha_input_sel, "")
+                page.fill(captcha_input_sel, captcha_val)
+                
+                try:
+                    with page.expect_download(timeout=10000) as download_info:
+                        page.click(btn_emitir)
+                    
+                    download = download_info.value
+                    download.save_as(temp_pdf_path)
+                    logger.info(f"[CNDT] PDF real da certidão CNDT baixado com sucesso em {temp_pdf_path}")
+                    break
+                    
+                except Exception as d_err:
+                    time.sleep(1.0)
+                    elementos_erro = page.query_selector_all(erro_selector)
+                    erro_msg = ""
+                    for el in elementos_erro:
+                        if el.is_visible():
+                            txt = el.inner_text().strip()
+                            if txt:
+                                erro_msg = txt
+                                break
+                    
+                    # Se houve erro de captcha, clica em "Emitir Nova Certidão" para resetar o form e tentar de novo
+                    btn_emitir_nova = 'input[value="Emitir Nova Certidão"]'
+                    try:
+                        if page.locator(btn_emitir_nova).count() > 0:
+                            logger.info("[CNDT CAPTCHA] Botão 'Emitir Nova Certidão' detectado. Reiniciando formulário...")
+                            page.click(btn_emitir_nova)
+                            page.wait_for_selector(cnpj_selector, timeout=15000)
+                            page.fill(cnpj_selector, cnpj)
+                    except Exception as btn_err:
+                        logger.warning(f"Erro ao tentar voltar com 'Emitir Nova Certidão': {btn_err}")
+                    
+                    if erro_msg:
+                        logger.warning(f"Mensagem do portal CNDT: '{erro_msg}'")
+                        if any(kwd in erro_msg.lower() for kwd in ["código", "segurança", "captcha", "inválido", "caracteres"]):
+                            continue
+                        else:
+                            raise Exception(f"Erro no portal CNDT: {erro_msg}")
+                    else:
+                        if tentativa == max_tentativas:
+                            raise Exception(f"Falha ao iniciar download ou erro não identificado: {d_err}")
+                        continue
+                
+            if not os.path.exists(temp_pdf_path):
+                raise Exception(f"Falha ao resolver o CAPTCHA da CNDT após {max_tentativas} tentativas.")
             browser.close()
             data_vencimento = (datetime.now() + timedelta(days=180)).strftime("%Y-%m-%d")
             return temp_pdf_path, data_vencimento
@@ -918,6 +1062,383 @@ def emitir_cnd_municipal_via_api(cnpj, municipio, uf):
     """
     logger.warning(f"[MUNICIPAL] Lógica específica para o município {municipio}/{uf} (CNPJ {cnpj}) ainda não implementada.")
     raise Exception(f"Integração Municipal para {municipio}/{uf} ainda não desenvolvida. Aguardando implementação específica.")
+
+
+def emitir_cnd_cadin_sp(cnpj):
+    """
+    Robô para emissão do Comprovante de Inexistência de Registros do
+    CADIN Municipal (Cadastro Informativo Municipal) da Prefeitura de São Paulo.
+    URL: https://www3.prefeitura.sp.gov.br/cadin/Pesq_Deb.aspx
+    Validade: 30 dias a partir da data de emissão.
+    """
+    logger.info(f"[CADIN] Iniciando consulta para o CNPJ: {cnpj}")
+    temp_pdf_path = f"temp_cadin_{cnpj}.pdf"
+    ocr = ddddocr.DdddOcr(show_ad=False)
+    cnpj_limpo = cnpj.replace(".", "").replace("/", "").replace("-", "")
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        context = browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            accept_downloads=True
+        )
+        page = context.new_page()
+
+        try:
+            page.goto("https://www3.prefeitura.sp.gov.br/cadin/Pesq_Deb.aspx", wait_until="networkidle", timeout=30000)
+            time.sleep(2.0)
+
+            # --- Etapa 1: Aceitar cookies (se o banner estiver visível) ---
+            try:
+                btn_cookies_sel = 'button:has-text("Autorizo o uso de todos os cookies")'
+                btn_cookies = page.locator(btn_cookies_sel)
+                if btn_cookies.count() > 0 and btn_cookies.first.is_visible():
+                    logger.info("[CADIN] Banner de cookies detectado. Aceitando...")
+                    click_humano(page, btn_cookies_sel)
+                    time.sleep(1.5)
+                else:
+                    logger.info("[CADIN] Banner de cookies não detectado. Prosseguindo...")
+            except Exception as cookie_err:
+                logger.warning(f"[CADIN] Erro ao tratar cookies (não-crítico): {cookie_err}")
+
+            # --- Etapa 2: Preencher CNPJ (somente números) ---
+            cnpj_selector = '#txt_CNPJ'
+            page.wait_for_selector(cnpj_selector, timeout=10000)
+            time.sleep(0.5)
+            click_humano(page, cnpj_selector)
+            time.sleep(0.3)
+            page.fill(cnpj_selector, "")
+            page.type(cnpj_selector, cnpj_limpo, delay=50)
+            time.sleep(0.5)
+            logger.info(f"[CADIN] CNPJ {cnpj_limpo} preenchido.")
+
+            # --- Etapa 3: Resolver CAPTCHA com loop de tentativas ---
+            captcha_img_sel = 'img[src*="CaptchaImage.aspx"]'
+            captcha_input_sel = '#txtimg'
+            btn_pesquisar = '#cmd_Pesq'
+
+            max_tentativas = 20
+            sucesso = False
+
+            for tentativa in range(1, max_tentativas + 1):
+                logger.info(f"[CADIN CAPTCHA] Tentativa {tentativa}/{max_tentativas}...")
+
+                # Captura a imagem do CAPTCHA
+                img_el = page.locator(captcha_img_sel).first
+                img_el.wait_for(state="visible", timeout=10000)
+                time.sleep(0.5)
+                img_bytes = img_el.screenshot()
+
+                # OCR: ddddocr nas primeiras tentativas, pytesseract como fallback
+                if tentativa <= 12:
+                    captcha_val = ocr.classification(img_bytes)
+                    captcha_val = "".join([c for c in captcha_val if c.isascii() and c.isalnum()])
+                    captcha_val = captcha_val.upper()
+                    logger.info(f"[CADIN CAPTCHA] ddddocr leu: '{captcha_val}'")
+                else:
+                    try:
+                        nparr = np.frombuffer(img_bytes, np.uint8)
+                        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                        resized = cv2.resize(gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+                        blur = cv2.GaussianBlur(resized, (3, 3), 0)
+                        thresh = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1]
+
+                        config = "--psm 8 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+                        captcha_val = pytesseract.image_to_string(thresh, config=config).strip()
+                        captcha_val = "".join([c for c in captcha_val if c.isascii() and c.isalnum()])
+                        captcha_val = captcha_val.upper()
+                        logger.info(f"[CADIN CAPTCHA] pytesseract leu: '{captcha_val}'")
+                    except Exception as ocr_err:
+                        logger.warning(f"[CADIN CAPTCHA] Erro no pytesseract: {ocr_err}")
+                        captcha_val = ""
+
+                if len(captcha_val) != 4:
+                    logger.warning(f"[CADIN CAPTCHA] Leitura inválida ('{captcha_val}', {len(captcha_val)} chars). Recarregando página...")
+                    page.reload(wait_until="networkidle", timeout=30000)
+                    time.sleep(1.5)
+                    # Aceitar cookies novamente se necessário
+                    try:
+                        btn_c = page.locator('button:has-text("Autorizo o uso de todos os cookies")')
+                        if btn_c.count() > 0 and btn_c.first.is_visible():
+                            click_humano(page, 'button:has-text("Autorizo o uso de todos os cookies")')
+                            time.sleep(1.0)
+                    except:
+                        pass
+                    # Preencher CNPJ novamente
+                    page.wait_for_selector(cnpj_selector, timeout=10000)
+                    time.sleep(0.5)
+                    page.fill(cnpj_selector, "")
+                    page.type(cnpj_selector, cnpj_limpo, delay=50)
+                    time.sleep(0.5)
+                    continue
+
+                # Preencher captcha e submeter
+                page.fill(captcha_input_sel, "")
+                page.type(captcha_input_sel, captcha_val, delay=40)
+                time.sleep(0.5)
+
+                # Clicar em Pesquisar
+                click_humano(page, btn_pesquisar)
+                time.sleep(3.0)
+
+                # Verificar resultado
+                body_text = page.inner_text("body")
+
+                # Captcha incorreto: se a página recarregou com o formulário vazio
+                if "CADIN Municipal - Consulta Inscritos" in body_text and "NÃO FORAM ENCONTRADAS" not in body_text and "FORAM ENCONTRADAS PENDÊNCIAS" not in body_text:
+                    # Verificar se há mensagem de erro de captcha
+                    lbl_result = page.locator("#lbl_NaoAchou")
+                    resultado_texto = ""
+                    if lbl_result.count() > 0:
+                        resultado_texto = lbl_result.inner_text().strip()
+
+                    if resultado_texto:
+                        logger.info(f"[CADIN] Resultado parcial: {resultado_texto}")
+
+                    # Se ainda estamos na tela de consulta, captcha provavelmente falhou
+                    captcha_ainda_visivel = page.locator(captcha_img_sel).count() > 0
+                    cnpj_field_val = page.input_value(cnpj_selector)
+                    if captcha_ainda_visivel and (not cnpj_field_val or len(cnpj_field_val) < 10):
+                        logger.warning("[CADIN CAPTCHA] CAPTCHA incorreto. Repreenchendo CNPJ e tentando novamente...")
+                        page.fill(cnpj_selector, "")
+                        page.type(cnpj_selector, cnpj_limpo, delay=50)
+                        time.sleep(0.5)
+                        continue
+                    elif captcha_ainda_visivel:
+                        logger.warning("[CADIN CAPTCHA] CAPTCHA incorreto. Tentando novamente...")
+                        continue
+
+                # Verificar se há pendências
+                if "FORAM ENCONTRADAS PENDÊNCIAS" in body_text and "NÃO FORAM ENCONTRADAS" not in body_text:
+                    logger.error("[CADIN] PENDÊNCIAS encontradas para este CNPJ!")
+                    browser.close()
+                    raise Exception(f"CADIN Municipal: Foram encontradas pendências para o CNPJ {cnpj}. Verificar manualmente.")
+
+                # Sucesso: sem pendências
+                if "NÃO FORAM ENCONTRADAS PENDÊNCIAS" in body_text or "NÃO FORAM ENCONTRADAS" in body_text:
+                    logger.info("[CADIN] Sem pendências! Clicando em 'Gerar Comprovante'...")
+                    sucesso = True
+
+                    btn_comprovante = '#cmd_comprovante'
+                    try:
+                        page.wait_for_selector(btn_comprovante, timeout=10000)
+                    except:
+                        # Tentar seletor alternativo
+                        btn_comprovante = 'input[value="Gerar Comprovante"]'
+                        page.wait_for_selector(btn_comprovante, timeout=5000)
+
+                    time.sleep(1.0)
+
+                    # Tratar download do PDF (o botão abre um popup/download)
+                    try:
+                        with page.expect_download(timeout=15000) as download_info:
+                            click_humano(page, btn_comprovante)
+
+                        download = download_info.value
+                        download.save_as(temp_pdf_path)
+                        logger.info(f"[CADIN] PDF do comprovante baixado: {temp_pdf_path}")
+                    except Exception as dl_err:
+                        # Fallback: talvez abra em popup — tentar capturar
+                        logger.warning(f"[CADIN] Download direto falhou: {dl_err}. Tentando capturar popup...")
+                        try:
+                            with context.expect_page(timeout=10000) as popup_info:
+                                click_humano(page, btn_comprovante)
+                            popup = popup_info.value
+                            popup.wait_for_load_state("networkidle", timeout=15000)
+                            time.sleep(2.0)
+
+                            # Tentar capturar o PDF da popup via download
+                            with popup.expect_download(timeout=10000) as dl2:
+                                popup.keyboard.press("Control+s")
+                            download2 = dl2.value
+                            download2.save_as(temp_pdf_path)
+                            logger.info(f"[CADIN] PDF capturado via popup: {temp_pdf_path}")
+                        except Exception as popup_err:
+                            logger.warning(f"[CADIN] Popup também falhou: {popup_err}. Tentando salvar via PDF da página...")
+                            # Último recurso: salvar a página de resultado como PDF
+                            page.pdf(path=temp_pdf_path)
+                            logger.info(f"[CADIN] Página salva como PDF: {temp_pdf_path}")
+
+                    break
+
+            if not sucesso:
+                browser.close()
+                raise Exception(f"Falha ao resolver o CAPTCHA do CADIN Municipal após {max_tentativas} tentativas.")
+
+            browser.close()
+
+            # Validade = data de emissão + 30 dias
+            data_vencimento = (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d")
+            logger.info(f"[CADIN] Concluído com sucesso. Vencimento: {data_vencimento}")
+            return temp_pdf_path, data_vencimento
+
+        except Exception as e:
+            browser.close()
+            raise Exception(f"Falha no robô CADIN Municipal: {str(e)}")
+
+
+def emitir_cnd_sicaf(cnpj, fila_id=None):
+    """
+    Robô para emissão do SICAF via gov.br usando certificado digital (A1).
+    """
+    logger.info(f"[SICAF] Iniciando consulta para o CNPJ: {cnpj}")
+    temp_pdf_path = f"temp_sicaf_{cnpj}.pdf"
+    
+    cnpj_limpo = cnpj.replace(".", "").replace("/", "").replace("-", "")
+    
+    # Prepara o JSON da policy do Chrome para auto-selecionar o certificado do CNPJ
+    # Certificados A1 de CNPJ (e-CNPJ) geralmente têm o CNPJ no Common Name (CN).
+    auto_select_policy = json.dumps([{"pattern": "*", "filter": {"SUBJECT": {"CN": f"*{cnpj_limpo}*"}}}])
+    
+    with sync_playwright() as p:
+        browser = p.chromium.launch(
+            headless=False,
+            args=[f"--auto-select-certificate-for-urls={auto_select_policy}"]
+        )
+        context = browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            ignore_https_errors=True
+        )
+        page = context.new_page()
+        
+        try:
+            # 1. Acessar a URL inicial
+            page.goto("https://www3.comprasnet.gov.br/sicaf-web/index.jsf")
+            time.sleep(1.0)
+            
+            # 2. Clicar no botão do fornecedor
+            btn_entrar_sso = 'xpath=//*[@id="formLogin:btnEntrarSsoFornecedor"]/span'
+            page.wait_for_selector(btn_entrar_sso, timeout=20000)
+            click_humano(page, btn_entrar_sso)
+            time.sleep(1.0)
+            
+            # 3. Clicar em login com certificado digital
+            btn_cert = 'xpath=//*[@id="login-certificate"]'
+            page.wait_for_selector(btn_cert, timeout=20000)
+            click_humano(page, btn_cert)
+            
+            # 4. Loop de checagem do Captcha e Login
+            logger.info("[SICAF] Aguardando autenticação gov.br (ou intervenção hCaptcha se necessário)...")
+            tempo_espera = 0
+            login_sucesso = False
+            estado_atual_banco = "processando"
+            
+            while tempo_espera < 90:
+                btn_confirmar_auth = 'xpath=//*[@id="j_idt109"]/div[1]/a/span'
+                menu_consultas = 'xpath=//*[@id="menu"]/div[4]/a'
+                
+                if page.locator(btn_confirmar_auth).count() > 0 or page.locator(menu_consultas).count() > 0:
+                    login_sucesso = True
+                    break
+                    
+                # Checa se existe iframe do hCaptcha visível
+                frames = page.frames
+                captcha_detected = False
+                for f in frames:
+                    if "hcaptcha" in f.url:
+                        try:
+                            if f.locator('body').is_visible():
+                                captcha_detected = True
+                        except:
+                            pass
+                
+                if captcha_detected:
+                    if estado_atual_banco != "aguardando_captcha":
+                        estado_atual_banco = "aguardando_captcha"
+                        if fila_id:
+                            supabase.table("fila_execucao").update({"log_erro": "[CAPTCHA] Aguardando resolução"}).eq("id", fila_id).execute()
+                        logger.warning("[SICAF] [ATENÇÃO] hCaptcha detectado! Trazendo janela para frente e aguardando resolução...")
+                        page.bring_to_front()
+                        print('\\a')  # Beep sonoro no console do Windows
+                
+                time.sleep(1.0)
+                tempo_espera += 1
+                
+            if not login_sucesso:
+                raise Exception("Falha ou timeout ao realizar login no SICAF via gov.br (hCaptcha não resolvido ou falha de certificado).")
+                
+            # Se estava aguardando captcha e passou, volta log_erro para null
+            if estado_atual_banco == "aguardando_captcha" and fila_id:
+                supabase.table("fila_execucao").update({"log_erro": None}).eq("id", fila_id).execute()
+                
+            logger.info("[SICAF] Autenticado com sucesso no portal do SICAF!")
+            time.sleep(1.0)
+            
+            # 5. Fluxo interno do SICAF (pós-login)
+            btn_confirmar_auth = 'xpath=//*[@id="j_idt109"]/div[1]/a/span'
+            if page.locator(btn_confirmar_auth).count() > 0:
+                click_humano(page, btn_confirmar_auth)
+                time.sleep(1.0)
+                
+            # Menu -> Consultas -> Situação do Fornecedor
+            menu_consultas = 'xpath=//*[@id="menu"]/div[4]/a'
+            page.wait_for_selector(menu_consultas, timeout=10000)
+            page.hover(menu_consultas)
+            time.sleep(1.0)
+            
+            menu_situacao = 'xpath=//*[@id="menu"]/div[4]/div[3]/a'
+            page.wait_for_selector(menu_situacao, timeout=10000)
+            click_humano(page, menu_situacao)
+            time.sleep(1.5)
+            
+            # Pesquisar
+            btn_pesquisar = 'xpath=//*[@id="form:pesq:botoesPesqPessoaId:btnPesquisar"]/span'
+            page.wait_for_selector(btn_pesquisar, timeout=10000)
+            click_humano(page, btn_pesquisar)
+            time.sleep(1.5)
+            
+            # Botão da lupa "Situação do Fornecedor"
+            btn_detalhar = 'xpath=//*[@id="form:fornecedores:0:detalharLink"]/span[2]'
+            page.wait_for_selector(btn_detalhar, timeout=15000)
+            
+            # Antes de clicar para baixar, ler a tela para extrair datas de validade e situação
+            body_text = page.inner_text("body")
+            possui_pendencia = False
+            
+            if "Possui Pendência" in body_text or "possui pendência" in body_text.lower():
+                possui_pendencia = True
+                logger.warning("[SICAF] Aviso: Empresa possui pendências listadas na tela do SICAF.")
+            
+            import re
+            datas_encontradas = re.findall(r"(\d{2}/\d{2}/\d{4})", body_text)
+            
+            menor_data = None
+            if datas_encontradas:
+                for d_str in datas_encontradas:
+                    try:
+                        d_obj = datetime.strptime(d_str, "%d/%m/%Y")
+                        if menor_data is None or d_obj < menor_data:
+                            menor_data = d_obj
+                    except:
+                        pass
+                        
+            if menor_data:
+                data_vencimento = menor_data.strftime("%Y-%m-%d")
+                logger.info(f"[SICAF] Menor data de validade encontrada: {data_vencimento}")
+            else:
+                data_vencimento = (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d")
+                logger.info(f"[SICAF] Nenhuma data válida encontrada. Assumindo validade padrão: {data_vencimento}")
+            
+            # Baixar o PDF da certidão final
+            try:
+                with page.expect_download(timeout=15000) as download_info:
+                    click_humano(page, btn_detalhar)
+                download = download_info.value
+                download.save_as(temp_pdf_path)
+                logger.info(f"[SICAF] PDF salvo em: {temp_pdf_path}")
+            except Exception as dl_err:
+                logger.warning(f"[SICAF] Falha no download padrão: {dl_err}. Tentando esperar popup...")
+                click_humano(page, btn_detalhar)
+                time.sleep(5.0)
+                page.pdf(path=temp_pdf_path)
+                
+            browser.close()
+            return temp_pdf_path, data_vencimento, possui_pendencia
+
+        except Exception as e:
+            browser.close()
+            raise Exception(f"Falha no robô SICAF: {str(e)}")
 
 
 # ==========================================
@@ -997,6 +1518,10 @@ def processar_tarefa(tarefa):
                 raise Exception(res.get("mensagem", "Falha desconhecida"))
         else:
             return emitir_cnd_municipal_via_api(cnpj, municipio, uf)
+    elif tipo == "CADIN":
+        return emitir_cnd_cadin_sp(cnpj)
+    elif tipo == "SICAF":
+        return emitir_cnd_sicaf(cnpj, tarefa.get("fila_id"))
     else:
         raise NotImplementedError(f"Tipo de certidão '{tipo}' não possui robô/integração implementada.")
 
@@ -1027,14 +1552,22 @@ def rodar_worker():
             pdf_local = None
             try:
                 # Processa o RPA correspondente
-                pdf_local, data_vencimento = processar_tarefa(tarefa)
+                resultado = processar_tarefa(tarefa)
+                
+                possui_pendencia = False
+                if isinstance(resultado, tuple) and len(resultado) == 3:
+                    pdf_local, data_vencimento, possui_pendencia = resultado
+                else:
+                    pdf_local, data_vencimento = resultado
+                    
+                status_final = "Atenção" if possui_pendencia else "Regular"
                 
                 # Sobe o PDF para o Supabase Storage
                 public_url = upload_pdf_to_storage(pdf_local, tarefa["cnpj"], tarefa["tipo_certidao"])
                 
                 # Sucesso: Atualiza a matriz de certidões com os novos dados
                 supabase.table("certidoes_matriz").update({
-                    "status": "Regular",
+                    "status": status_final,
                     "data_emissao": datetime.now().strftime("%Y-%m-%d"),
                     "data_vencimento": data_vencimento,
                     "url_pdf": public_url,
@@ -1062,11 +1595,32 @@ def rodar_worker():
                     "updated_at": datetime.utcnow().isoformat()
                 }).eq("id", tarefa["fila_id"]).execute()
                 
-                # Registra o erro na matriz
-                supabase.table("certidoes_matriz").update({
-                    "status": "Erro",
-                    "ultimo_log": f"Erro no Worker: {error_msg}"
-                }).eq("id", tarefa["certidao_matriz_id"]).execute()
+                # Registra o erro na matriz preservando o status 'Regular' se estiver vigente
+                try:
+                    matriz_res = supabase.table("certidoes_matriz").select("data_vencimento").eq("id", tarefa["certidao_matriz_id"]).execute()
+                    is_valid = False
+                    if matriz_res.data:
+                        venc_str = matriz_res.data[0].get("data_vencimento")
+                        if venc_str:
+                            try:
+                                data_venc = datetime.strptime(venc_str, "%Y-%m-%d").date()
+                                if data_venc >= datetime.now().date():
+                                    is_valid = True
+                            except Exception as parse_err:
+                                logger.warning(f"Erro ao parsear data_vencimento '{venc_str}': {parse_err}")
+                    
+                    if is_valid:
+                        supabase.table("certidoes_matriz").update({
+                            "status": "Regular",
+                            "ultimo_log": f"RPA tentou renovar, mas falhou (documento atual ainda válido). Erro: {error_msg}"
+                        }).eq("id", tarefa["certidao_matriz_id"]).execute()
+                    else:
+                        supabase.table("certidoes_matriz").update({
+                            "status": "Erro",
+                            "ultimo_log": f"Erro no Worker: {error_msg}"
+                        }).eq("id", tarefa["certidao_matriz_id"]).execute()
+                except Exception as db_err:
+                    logger.error(f"Erro ao consultar/atualizar matriz de certidões: {db_err}")
                 
             finally:
                 # Garante que o arquivo temporário local seja deletado

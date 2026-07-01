@@ -1,8 +1,5 @@
-import os
-import sys
 import time
 from playwright.sync_api import sync_playwright
-from PIL import Image
 
 def test_federal_stealth():
     cnpj = "09440233000180"

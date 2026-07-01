@@ -1,7 +1,6 @@
 import os
 import sys
 import ssl
-import time
 from datetime import datetime, timedelta
 
 # Monkeypatch ssl to avoid issues on proxy environment
